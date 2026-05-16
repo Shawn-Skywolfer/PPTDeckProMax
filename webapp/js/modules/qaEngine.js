@@ -45,7 +45,26 @@ class QAEngine {
   }
 
   exportArtifacts() {
+    const overallScore = this.calculateOverallScore();
+    const rollbackSummary = this.rollbackPlan?.summary
+      ? `- 受影响页面: ${(this.rollbackPlan.summary.impacted_pages || []).join(', ') || '无'}\n- Findings 总数: ${this.rollbackPlan.summary.total_findings || 0}`
+      : '- 暂未生成 Rollback Plan';
+
+    const reviewReport = `# Deck Review Report
+
+## 总体结论
+- Findings 数量: ${this.findings.length}
+- 整体评分: ${overallScore > 0 ? overallScore.toFixed(1) : '—'}
+
+## 维度评分
+${Object.entries(this.scorecard.dimensions || {}).map(([key, value]) => `- ${key}: ${value ?? '—'}`).join('\n')}
+
+## Rollback 摘要
+${rollbackSummary}
+`;
+
     return {
+      deck_review_report: reviewReport,
       deck_review_findings: JSON.parse(JSON.stringify(this.findings)),
       commercial_scorecard: JSON.parse(JSON.stringify(this.scorecard)),
       review_rollback_plan: this.rollbackPlan ? JSON.parse(JSON.stringify(this.rollbackPlan)) : {}

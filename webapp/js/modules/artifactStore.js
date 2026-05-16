@@ -244,11 +244,9 @@ class ArtifactStore {
 
   setProjectMeta(data) {
     if (!this.currentProject) return;
-    this.currentProject = {
-      ...this.currentProject,
-      ...data,
+    Object.assign(this.currentProject, data, {
       updatedAt: Date.now()
-    };
+    });
     this._debouncedSave();
     this.emit('project:meta-changed', data);
   }

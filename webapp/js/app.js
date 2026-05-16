@@ -308,6 +308,64 @@ function syncQAArtifacts() {
   persistArtifactMap(qaEngine.exportArtifacts());
 }
 
+function syncCurrentProjectReference() {
+  const latestProject = artifactStore.getCurrentProject();
+  if (latestProject) {
+    currentProject = latestProject;
+  }
+  return currentProject;
+}
+
+function buildInterviewSessionArtifact(overrides = {}) {
+  syncCurrentProjectReference();
+  if (!currentProject) return null;
+  const existing = currentProject.artifacts.interview_session || {};
+  const interviewState = {
+    ...(currentProject.interview || {}),
+    ...existing,
+    ...overrides
+  };
+
+  return {
+    scenario: interviewState.scenario || currentProject.briefScenario || 'business_proposal',
+    mode: interviewState.mode || 'chat',
+    sessionState: interviewState.sessionState || 'preparing',
+    fillRate: interviewState.fillRate || 0,
+    redactionPending: interviewState.redactionPending || 0,
+    claims: interviewState.claims || [],
+    gaps: interviewState.gaps || [],
+    messages: interviewState.messages || [],
+    redactionItems: interviewState.redactionItems || [],
+    updatedAt: Date.now()
+  };
+}
+
+function syncInterviewArtifacts(overrides = {}) {
+  syncCurrentProjectReference();
+  if (!currentProject) return null;
+
+  const managerState = interviewManager ? {
+    scenario: interviewManager.scenario,
+    mode: interviewManager.mode,
+    claims: interviewManager.claims,
+    gaps: interviewManager.gaps,
+    messages: interviewManager.messages,
+    redactionItems: interviewManager.redactionItems,
+    fillRate: interviewManager.getFillRate(),
+    redactionPending: interviewManager.redactionItems.filter(item => item.status === 'pending').length
+  } : {};
+
+  const interviewData = {
+    ...(currentProject.interview || {}),
+    ...managerState,
+    ...overrides
+  };
+
+  artifactStore.setInterviewData(interviewData);
+  artifactStore.setArtifact('interview_session', buildInterviewSessionArtifact(interviewData));
+  return interviewData;
+}
+
 function restoreProjectRuntime(project) {
   currentProject = project;
   interviewManager = null;
@@ -792,7 +850,8 @@ function renderStepper() {
   workflowEngine.renderStepper(els.stepper, currentProject, currentMode);
 }
 
-function renderStepContent() {
+function refreshWorkflowChrome() {
+  syncCurrentProjectReference();
   const step = workflowEngine.getCurrentStep();
   if (!step) return;
 
@@ -804,6 +863,15 @@ function renderStepContent() {
   const next = workflowEngine.getNextStep(currentMode);
   els.prevBtn.disabled = !prev;
   els.nextBtn.disabled = !next || !workflowEngine.canAdvance(currentProject);
+
+  renderStepper();
+}
+
+function renderStepContent() {
+  const step = workflowEngine.getCurrentStep();
+  if (!step) return;
+
+  refreshWorkflowChrome();
 
   const content = buildStepUI(step);
   els.stepContent.innerHTML = '';
@@ -1257,7 +1325,7 @@ function initInterviewUI(container) {
     const rate = interviewManager.getFillRate();
     fillRateDisplay.textContent = rate + '%';
     fillRateBar.style.width = rate + '%';
-    artifactStore.setInterviewData({ fillRate: rate, scenario: interviewManager.scenario });
+    syncInterviewArtifacts({ fillRate: rate, scenario: interviewManager.scenario });
   }
 
   // Scenario switch handler
@@ -1279,15 +1347,7 @@ function initInterviewUI(container) {
       interviewManager.setScenario(newScenario);
       if (scenarioDesc) scenarioDesc.textContent = SCENARIO_CONFIG[newScenario].description;
       updateFillRate();
-
-      // Persist
-      artifactStore.setInterviewData({
-        scenario: newScenario,
-        claims: interviewManager.claims,
-        gaps: interviewManager.gaps,
-        messages: interviewManager.messages,
-        fillRate: interviewManager.getFillRate()
-      });
+      syncInterviewArtifacts({ scenario: newScenario });
 
       // Reset UI
       contentDiv.innerHTML = `<div class="p-8 text-center text-slate-400">
@@ -1347,7 +1407,7 @@ function initInterviewUI(container) {
 
     showToast('正在分析 Claims 和 Gaps...', 'info');
     const { claims, gaps } = interviewManager.extractClaimsAndGaps(cleanPages, brief);
-    artifactStore.setInterviewData({ claims, gaps });
+    syncInterviewArtifacts({ claims, gaps, sessionState: gaps.length === 0 ? 'finalized' : 'in_progress' });
 
     if (gaps.length === 0) {
       showToast('未发现知识缺口', 'success');
@@ -1374,7 +1434,7 @@ function initInterviewUI(container) {
   container.querySelector('#finalize-interview').addEventListener('click', () => {
     const expertContext = interviewManager.finalize();
     artifactStore.setArtifact('deck_expert_context', expertContext);
-    artifactStore.setInterviewData({ sessionState: 'finalized' });
+    syncInterviewArtifacts({ sessionState: 'finalized' });
     showToast('Expert Context 已生成', 'success');
     updatePreview();
   });
@@ -1400,13 +1460,13 @@ function initRedactionUI(container) {
 
   interviewManager.renderRedactionUI(listDiv, () => {
     const pending = interviewManager.redactionItems.filter(r => r.status === 'pending').length;
-    artifactStore.setInterviewData({ redactionPending: pending });
+    syncInterviewArtifacts({ redactionPending: pending });
   });
 
   container.querySelector('#confirm-redaction').addEventListener('click', () => {
     const expertContext = interviewManager.finalize();
     artifactStore.setArtifact('deck_expert_context', expertContext);
-    artifactStore.setInterviewData({ sessionState: 'finalized', redactionPending: 0 });
+    syncInterviewArtifacts({ sessionState: 'finalized', redactionPending: 0 });
     showToast('脱敏完成，Expert Context 已生成', 'success');
     updatePreview();
   });
@@ -1876,13 +1936,30 @@ function initResizeHandle() {
 // ===== Workflow Engine Events =====
 workflowEngine.on('step:changed', (step) => {
   renderStepContent();
-  renderStepper();
   updatePreview();
 });
 
 // ===== Artifact Store Events =====
 artifactStore.on('artifact:changed', () => {
+  syncCurrentProjectReference();
+  refreshWorkflowChrome();
   updatePreview();
+});
+
+artifactStore.on('interview:changed', () => {
+  syncCurrentProjectReference();
+  refreshWorkflowChrome();
+  updatePreview();
+});
+
+artifactStore.on('project:meta-changed', () => {
+  syncCurrentProjectReference();
+  refreshWorkflowChrome();
+});
+
+artifactStore.on('status:changed', () => {
+  syncCurrentProjectReference();
+  refreshWorkflowChrome();
 });
 
 artifactStore.on('call:added', () => {
