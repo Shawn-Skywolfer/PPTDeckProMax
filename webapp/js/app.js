@@ -270,6 +270,13 @@ function buildDeckRuntimeArtifacts(project = currentProject) {
   };
 
   const previousState = project.artifacts.slide_state || {};
+  const renderedSlides = slidePreview.buildRenderedSlides({
+    deck_clean_pages: project.artifacts.deck_clean_pages || '',
+    deck_visual_composition: project.artifacts.deck_visual_composition || '',
+    deck_theme_tokens: theme,
+    layout_manifest: layoutManifest,
+    asset_manifest: assetManifest
+  }, project.name || 'PPT Deck Pro Max');
   const slideState = {
     ...previousState,
     project_id: previousState.project_id || project.id,
@@ -280,14 +287,17 @@ function buildDeckRuntimeArtifacts(project = currentProject) {
     pages: pages.map((page) => {
       const layout = layoutManifest.pages.find(item => item.page_id === page.id) || {};
       const assets = assetManifest.assets.filter(asset => asset.page_id === page.id);
+      const rendered = renderedSlides.find(item => item.page_id === page.id) || {};
       return {
         page_id: page.id,
+        page_num: page.pageNum,
         title: page.title,
         status: 'ready',
         archetype: layout.archetype || 'content',
         protagonist: layout.protagonist || '',
         content: page.content,
-        assets
+        assets,
+        html: rendered.html || ''
       };
     }),
     theme

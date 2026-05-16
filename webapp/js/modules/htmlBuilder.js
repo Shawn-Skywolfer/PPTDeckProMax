@@ -29,9 +29,17 @@ class HTMLBuilder {
     const primary = colors.primary || '#6366f1';
     const textDark = colors.text_dark || '#1e293b';
     const bg = colors.bg || '#ffffff';
+    const builtPages = project.artifacts.slide_state?.pages || [];
 
     const slidesHtml = pages.map((page, idx) => {
       const layout = layoutManifest.pages.find(item => item.page_id === page.id) || {};
+      const built = builtPages.find(item => item.page_id === page.id);
+      if (built?.html) {
+        return `
+<article class="slide" id="slide-${idx + 1}" data-index="${idx + 1}" style="display:none;">
+  ${built.html}
+</article>`;
+      }
       const lines = page.content.split('\n').filter(l => l.trim());
       const contentHtml = lines.map(l => {
         const trimmed = l.trim().replace(/^[-*•]\s*/, '');
