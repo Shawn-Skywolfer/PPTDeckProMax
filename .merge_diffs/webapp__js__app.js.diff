@@ -1,0 +1,643 @@
+diff --git a/webapp/js/app.js b/webapp/js/app.js
+index d7ab848..2110f85 100644
+--- a/webapp/js/app.js
++++ b/webapp/js/app.js
+@@ -81,8 +81,77 @@ function showLoading(button, text = '生成中...') {
+   };
+ }
+ 
++const OBJECT_ARTIFACT_KEYS = new Set([
++  'slide_state',
++  'layout_manifest',
++  'asset_manifest',
++  'deck_review_findings',
++  'commercial_scorecard',
++  'review_rollback_plan'
++]);
++const JSON_TEXT_ARTIFACT_KEYS = new Set(['deck_theme_tokens']);
++
++function stringifyArtifact(value) {
++  return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
++}
++
++function updateArtifactTextarea(key, value) {
++  const textarea = document.querySelector(`[data-artifact="${key}"]`);
++  if (textarea) {
++    textarea.value = stringifyArtifact(value);
++  }
++}
++
++function coerceArtifactValue(key, value) {
++  if (value == null) return value;
++  if (OBJECT_ARTIFACT_KEYS.has(key)) {
++    if (typeof value === 'string') {
++      try {
++        return JSON.parse(value);
++      } catch (err) {
++        return key === 'deck_review_findings' ? [] : {};
++      }
++    }
++    return value;
++  }
++  if (JSON_TEXT_ARTIFACT_KEYS.has(key)) {
++    if (typeof value !== 'string') {
++      return JSON.stringify(value, null, 2);
++    }
++    try {
++      return JSON.stringify(JSON.parse(value), null, 2);
++    } catch (err) {
++      return value.trim();
++    }
++  }
++  return typeof value === 'string' ? value.trim() : value;
++}
++
++function persistArtifactMap(artifactMap) {
++  Object.entries(artifactMap).forEach(([key, value]) => {
++    const normalized = coerceArtifactValue(key, value);
++    artifactStore.setArtifact(key, normalized);
++    updateArtifactTextarea(key, normalized);
++  });
++}
++
++function parseStructuredArtifacts(text, artifactKeys) {
++  const result = {};
++  const regex = /<<<([a-zA-Z0-9_]+)>>>\s*([\s\S]*?)\s*<<<END>>>/g;
++  let match;
++  while ((match = regex.exec(text)) !== null) {
++    const key = match[1];
++    if (artifactKeys.includes(key)) {
++      result[key] = match[2].trim();
++    }
++  }
++  return result;
++}
++
+ // ===== AI Generation =====
+-async function generateArtifact(role, artifactKey, promptData, button) {
++async function generateArtifact(role, artifactKey, promptData, button, options = {}) {
++  const artifactKeys = Array.isArray(artifactKey) ? artifactKey : [artifactKey];
++  const previewArtifactKey = options.previewArtifactKey || artifactKeys[0];
+   const stopLoading = button ? showLoading(button) : () => {};
+ 
+   try {
+@@ -98,18 +167,23 @@ async function generateArtifact(role, artifactKey, promptData, button) {
+       messages,
+       onChunk: (delta, full) => {
+         generatedText = full;
+-        // Update textarea in real-time if it exists
+-        const textarea = document.querySelector(`[data-artifact="${artifactKey}"]`);
+-        if (textarea) {
+-          textarea.value = generatedText;
+-        }
++        updateArtifactTextarea(previewArtifactKey, generatedText);
+       },
+       onError: (err) => {
+         showToast('生成失败: ' + err.message, 'error');
+       }
+     });
+ 
+-    artifactStore.setArtifact(artifactKey, response.text);
++    const parsedArtifacts = artifactKeys.length === 1
++      ? { [artifactKeys[0]]: response.text }
++      : parseStructuredArtifacts(response.text, artifactKeys);
++
++    if (artifactKeys.length > 1 && Object.keys(parsedArtifacts).length === 0) {
++      parsedArtifacts[artifactKeys[0]] = response.text;
++    }
++
++    persistArtifactMap(parsedArtifacts);
++
+     artifactStore.addCall({
+       id: `call_${Date.now()}`,
+       role,
+@@ -125,8 +199,11 @@ async function generateArtifact(role, artifactKey, promptData, button) {
+ 
+     updatePreview();
+     updateCostDisplay();
+-    showToast(`${artifactKey} 生成完成`, 'success');
+-    return response.text;
++    const successLabel = artifactKeys.length === 1
++      ? `${artifactKeys[0]} 生成完成`
++      : `已生成 ${Object.keys(parsedArtifacts).length} 个产物`;
++    showToast(successLabel, 'success');
++    return parsedArtifacts;
+   } catch (err) {
+     showToast('生成出错: ' + err.message, 'error');
+     throw err;
+@@ -138,6 +215,105 @@ async function generateArtifact(role, artifactKey, promptData, button) {
+ // Per-role model cache
+ const roleModelCache = {};
+ 
++function safeJsonParse(value, fallback = {}) {
++  if (typeof value !== 'string') return value || fallback;
++  try {
++    return JSON.parse(value);
++  } catch (err) {
++    return fallback;
++  }
++}
++
++function buildAssetManifestFallback(project = currentProject) {
++  if (!project) return { assets: [] };
++  const pages = slidePreview.parseCleanPages(project.artifacts.deck_clean_pages || '');
++  const visuals = slidePreview.parseVisualComposition(project.artifacts.deck_visual_composition || '');
++  return {
++    assets: pages.map((page) => {
++      const visual = visuals.find(v => v.pageNum === page.pageNum) || {};
++      return {
++        page_id: page.id,
++        title: page.title,
++        type: visual.archetype || 'content',
++        description: visual.protagonist || '根据页面内容补充图表、截图或关键数字素材',
++        source_hint: visual.chart || visual.weight || '业务数据、截图或品牌资产',
++        priority: page.pageNum <= 3 ? 'high' : 'medium',
++        placeholder_allowed: true
++      };
++    })
++  };
++}
++
++function buildDeckRuntimeArtifacts(project = currentProject) {
++  if (!project) return null;
++  const pages = slidePreview.parseCleanPages(project.artifacts.deck_clean_pages || '');
++  const visuals = slidePreview.parseVisualComposition(project.artifacts.deck_visual_composition || '');
++  const theme = safeJsonParse(project.artifacts.deck_theme_tokens, {});
++  const assetManifest = project.artifacts.asset_manifest?.assets?.length
++    ? project.artifacts.asset_manifest
++    : buildAssetManifestFallback(project);
++
++  const layoutManifest = {
++    pages: pages.map((page) => {
++      const visual = visuals.find(v => v.pageNum === page.pageNum) || {};
++      return {
++        page_id: page.id,
++        page_num: page.pageNum,
++        title: page.title,
++        archetype: visual.archetype || 'content',
++        protagonist: visual.protagonist || '',
++        weight: visual.weight || '',
++        chart: visual.chart || '',
++        asset_count: assetManifest.assets.filter(asset => asset.page_id === page.id).length
++      };
++    })
++  };
++
++  const previousState = project.artifacts.slide_state || {};
++  const slideState = {
++    ...previousState,
++    project_id: previousState.project_id || project.id,
++    global_status: pages.length > 0 ? 'built' : 'briefing',
++    visual_locked: Boolean(project.artifacts.deck_visual_system),
++    review_iteration: previousState.review_iteration || 0,
++    output_mode: project.outputMode || previousState.output_mode || 'pptx+html',
++    pages: pages.map((page) => {
++      const layout = layoutManifest.pages.find(item => item.page_id === page.id) || {};
++      const assets = assetManifest.assets.filter(asset => asset.page_id === page.id);
++      return {
++        page_id: page.id,
++        title: page.title,
++        status: 'ready',
++        archetype: layout.archetype || 'content',
++        protagonist: layout.protagonist || '',
++        content: page.content,
++        assets
++      };
++    }),
++    theme
++  };
++
++  return { slide_state: slideState, layout_manifest: layoutManifest, asset_manifest: assetManifest };
++}
++
++function syncBuildArtifacts(project = currentProject) {
++  const runtimeArtifacts = buildDeckRuntimeArtifacts(project);
++  if (!runtimeArtifacts) return null;
++  persistArtifactMap(runtimeArtifacts);
++  return runtimeArtifacts;
++}
++
++function syncQAArtifacts() {
++  if (!currentProject || !qaEngine) return;
++  persistArtifactMap(qaEngine.exportArtifacts());
++}
++
++function restoreProjectRuntime(project) {
++  currentProject = project;
++  interviewManager = null;
++  qaEngine = new QAEngine(project?.artifacts);
++}
++
+ // ===== Provider Drawer =====
+ function initProviderDrawer() {
+   els.providerToggle.addEventListener('click', () => {
+@@ -539,7 +715,7 @@ function initModeToggle() {
+       els.modeBadge.className = 'text-xs font-medium px-2 py-0.5 rounded-full bg-slate-500/20 text-slate-300 border border-slate-500/30';
+     }
+     if (currentProject) {
+-      currentProject.mode = mode;
++      artifactStore.setProjectMeta({ mode });
+     }
+     renderStepper();
+     renderStepContent();
+@@ -559,10 +735,14 @@ async function loadProjectList() {
+ async function loadProject(id) {
+   try {
+     const project = await artifactStore.loadProject(id);
+-    currentProject = project;
++    restoreProjectRuntime(project);
+     currentMode = project.mode;
+     workflowEngine.setStep(project.currentStep);
++    els.projectSelect.value = project.id;
+     updateModeUI();
++    if (project.artifacts.deck_clean_pages) {
++      syncBuildArtifacts(project);
++    }
+     renderStepper();
+     renderStepContent();
+     updatePreview();
+@@ -577,11 +757,11 @@ function createNewProject() {
+   const name = prompt('项目名称:', '我的 Deck 项目');
+   if (!name) return;
+   const project = artifactStore.createProject(name, currentMode);
+-  currentProject = project;
++  restoreProjectRuntime(project);
+   workflowEngine.setStep(0);
+-  interviewManager = null;
+-  qaEngine = new QAEngine();
+-  loadProjectList();
++  loadProjectList().then(() => {
++    els.projectSelect.value = project.id;
++  });
+   renderStepper();
+   renderStepContent();
+   updatePreview();
+@@ -589,11 +769,21 @@ function createNewProject() {
+ }
+ 
+ function updateModeUI() {
+-  if (currentMode === 'expert') {
+-    els.modeExpert.click();
+-  } else {
+-    els.modeQuick.click();
+-  }
++  const isExpert = currentMode === 'expert';
++  els.modeExpert.classList.toggle('bg-white', isExpert);
++  els.modeExpert.classList.toggle('text-indigo-600', isExpert);
++  els.modeExpert.classList.toggle('shadow-sm', isExpert);
++  els.modeExpert.classList.toggle('text-slate-500', !isExpert);
++
++  els.modeQuick.classList.toggle('bg-white', !isExpert);
++  els.modeQuick.classList.toggle('text-indigo-600', !isExpert);
++  els.modeQuick.classList.toggle('shadow-sm', !isExpert);
++  els.modeQuick.classList.toggle('text-slate-500', isExpert);
++
++  els.modeBadge.textContent = isExpert ? 'Expert' : 'Quick';
++  els.modeBadge.className = isExpert
++    ? 'text-xs font-medium px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
++    : 'text-xs font-medium px-2 py-0.5 rounded-full bg-slate-500/20 text-slate-300 border border-slate-500/30';
+ }
+ 
+ // ===== Stepper & Navigation =====
+@@ -655,8 +845,10 @@ function buildStepUI(step) {
+             const text = await file.text();
+             try {
+               await artifactStore.importProject(text);
+-              currentProject = artifactStore.getCurrentProject();
+-              loadProjectList();
++              restoreProjectRuntime(artifactStore.getCurrentProject());
++              await loadProjectList();
++              els.projectSelect.value = currentProject.id;
++              updateModeUI();
+               renderStepper();
+               renderStepContent();
+               updatePreview();
+@@ -724,22 +916,18 @@ function buildStepUI(step) {
+       `;
+       setTimeout(() => {
+         const sourceTextarea = container.querySelector('#source-material');
+-        const briefTextarea = container.querySelector('[data-artifact="deck_brief"]');
+         const scenarioSelect = container.querySelector('#brief-scenario');
+         const scenarioDesc = container.querySelector('#brief-scenario-desc');
+         const customPromptPanel = container.querySelector('#custom-prompt-panel');
+         const customPromptChevron = container.querySelector('#custom-prompt-chevron');
+         const customFieldsTextarea = container.querySelector('#custom-fields');
+         const customConstraintsTextarea = container.querySelector('#custom-constraints');
+-        if (sourceVal && briefTextarea) briefTextarea.value = sourceVal;
+ 
+         // Scenario switch
+         scenarioSelect.addEventListener('change', () => {
+           const scenario = scenarioSelect.value;
+           scenarioDesc.textContent = BRIEF_SCENARIOS[scenario].description;
+-          currentProject.briefScenario = scenario;
+-          // Also sync interview scenario for consistency
+-          currentProject.interviewScenario = scenario;
++          artifactStore.setProjectMeta({ briefScenario: scenario, interviewScenario: scenario });
+           artifactStore.setInterviewData({ scenario });
+           showToast(`已切换 Brief 策略: ${BRIEF_SCENARIOS[scenario].label}`, 'success');
+         });
+@@ -805,21 +993,18 @@ function buildStepUI(step) {
+     case 'vibe': {
+       const brief = currentProject?.artifacts.deck_brief || '';
+       container.innerHTML = `
++        <div class="mb-4 p-4 bg-indigo-50 border border-indigo-100 rounded-xl text-sm text-indigo-900">
++          基于 Brief 统一定义视觉气质、配色、字体、图形语言和页面节奏，作为后续视觉系统的输入。
++        </div>
+         ${buildArtifactEditor('deck_vibe_brief', 'deck_vibe_brief.md', '视觉 mood、配色、字体、图形语言...')}
+         <button id="generate-vibe-btn" class="w-full px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2 mb-6">
+           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+           生成 Vibe Brief
+         </button>
+-        ${buildArtifactEditor('deck_narrative_arc', 'deck_narrative_arc.md', 'Beat 序列、情感曲线...')}
+       `;
+       setTimeout(() => {
+         container.querySelector('#generate-vibe-btn').addEventListener('click', () => {
+-          const prompt = promptEngine.buildVisualSystemPrompt({
+-            deck_brief: brief,
+-            deck_vibe_brief: currentProject?.artifacts.deck_vibe_brief || '',
+-            deck_clean_pages: currentProject?.artifacts.deck_clean_pages || ''
+-          });
+-          // Generate both
++          const prompt = promptEngine.buildVibePrompt(brief);
+           generateArtifact('visual', 'deck_vibe_brief', prompt, container.querySelector('#generate-vibe-btn'));
+         });
+       }, 0);
+@@ -840,7 +1025,13 @@ function buildStepUI(step) {
+       setTimeout(() => {
+         container.querySelector('#generate-narrative-btn').addEventListener('click', () => {
+           const prompt = promptEngine.buildNarrativePrompt(brief, expertCtx);
+-          generateArtifact('brief', 'deck_narrative_arc', prompt, container.querySelector('#generate-narrative-btn'));
++          generateArtifact(
++            'brief',
++            ['deck_narrative_arc', 'deck_hero_pages'],
++            prompt,
++            container.querySelector('#generate-narrative-btn'),
++            { previewArtifactKey: 'deck_narrative_arc' }
++          );
+         });
+       }, 0);
+       break;
+@@ -864,15 +1055,52 @@ function buildStepUI(step) {
+       setTimeout(() => {
+         container.querySelector('#generate-compression-btn').addEventListener('click', () => {
+           const prompt = promptEngine.buildCompressionPrompt(layout, brief);
+-          generateArtifact('brief', 'deck_clean_pages', prompt, container.querySelector('#generate-compression-btn'));
++          generateArtifact(
++            'brief',
++            ['deck_clean_pages', 'deck_visual_composition'],
++            prompt,
++            container.querySelector('#generate-compression-btn'),
++            { previewArtifactKey: 'deck_clean_pages' }
++          ).then(() => {
++            syncBuildArtifacts();
++          });
+         });
+       }, 0);
+       break;
+     }
+ 
+-    case 'assets':
+-      container.innerHTML = buildArtifactEditor('deck_asset_plan', 'deck_asset_plan.md', '素材需求清单...');
++    case 'assets': {
++      container.innerHTML = `
++        <button id="generate-assets-btn" class="w-full px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2 mb-6">
++          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
++          生成素材计划
++        </button>
++        ${buildArtifactEditor('deck_asset_plan', 'deck_asset_plan.md', '素材需求清单...')}
++        <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
++          <div class="text-sm font-semibold text-slate-700 mb-2">asset_manifest.json</div>
++          <pre class="text-xs bg-white border border-slate-200 rounded-lg p-3 overflow-auto max-h-80">${JSON.stringify(currentProject?.artifacts.asset_manifest || { assets: [] }, null, 2)}</pre>
++        </div>
++      `;
++      setTimeout(() => {
++        container.querySelector('#generate-assets-btn').addEventListener('click', () => {
++          const prompt = promptEngine.buildAssetsPrompt(
++            currentProject?.artifacts.deck_clean_pages || '',
++            currentProject?.artifacts.deck_visual_composition || ''
++          );
++          generateArtifact(
++            'visual',
++            ['deck_asset_plan', 'asset_manifest'],
++            prompt,
++            container.querySelector('#generate-assets-btn'),
++            { previewArtifactKey: 'deck_asset_plan' }
++          ).then(() => {
++            syncBuildArtifacts();
++            renderStepContent();
++          });
++        });
++      }, 0);
+       break;
++    }
+ 
+     case 'visual_system': {
+       const vibe = currentProject?.artifacts.deck_vibe_brief || '';
+@@ -895,7 +1123,15 @@ function buildStepUI(step) {
+             deck_vibe_brief: vibe,
+             deck_clean_pages: cleanPages
+           });
+-          generateArtifact('visual', 'deck_visual_system', prompt, container.querySelector('#generate-visual-system-btn'));
++          generateArtifact(
++            'visual',
++            ['deck_visual_system', 'deck_component_tokens', 'deck_theme_tokens', 'deck_geometry_rules', 'deck_page_skeletons'],
++            prompt,
++            container.querySelector('#generate-visual-system-btn'),
++            { previewArtifactKey: 'deck_visual_system' }
++          ).then(() => {
++            syncBuildArtifacts();
++          });
+         });
+       }, 0);
+       break;
+@@ -1178,6 +1414,8 @@ function initRedactionUI(container) {
+ 
+ // ===== Build UI =====
+ function buildBuildUI() {
++  const runtimeArtifacts = buildDeckRuntimeArtifacts() || { layout_manifest: { pages: [] } };
++  const pages = runtimeArtifacts.layout_manifest.pages || [];
+   return `
+     <div class="space-y-6">
+       <div class="flex items-center justify-between">
+@@ -1193,27 +1431,58 @@ function buildBuildUI() {
+           </button>
+         </div>
+       </div>
+-      <div id="build-pages-list" class="space-y-3">
+-        <div class="p-4 bg-slate-50 rounded-lg text-center text-slate-400 text-sm">
+-          暂无页面，请先在「Clean Pages」步骤定义内容
++      <div class="grid grid-cols-3 gap-3">
++        <div class="p-4 bg-white border border-slate-200 rounded-xl">
++          <div class="text-2xl font-bold text-slate-800">${pages.length}</div>
++          <div class="text-xs text-slate-500 mt-1">已生成页面</div>
++        </div>
++        <div class="p-4 bg-white border border-slate-200 rounded-xl">
++          <div class="text-2xl font-bold text-slate-800">${pages.filter(p => p.protagonist).length}</div>
++          <div class="text-xs text-slate-500 mt-1">已定义视觉主角</div>
++        </div>
++        <div class="p-4 bg-white border border-slate-200 rounded-xl">
++          <div class="text-2xl font-bold text-slate-800">${pages.reduce((sum, p) => sum + (p.asset_count || 0), 0)}</div>
++          <div class="text-xs text-slate-500 mt-1">规划素材条目</div>
+         </div>
+       </div>
++      <div id="build-pages-list" class="space-y-3">
++        ${pages.length === 0 ? `
++          <div class="p-4 bg-slate-50 rounded-lg text-center text-slate-400 text-sm">
++            暂无页面，请先在「Clean Pages」步骤定义内容
++          </div>
++        ` : pages.map(page => `
++          <div class="p-4 bg-white border border-slate-200 rounded-xl">
++            <div class="flex items-start justify-between gap-4">
++              <div>
++                <div class="text-sm font-semibold text-slate-800">${page.page_num}. ${page.title}</div>
++                <div class="text-xs text-slate-500 mt-1">Archetype: ${page.archetype || 'content'} · 视觉主角: ${page.protagonist || '待补充'}</div>
++              </div>
++              <div class="text-xs px-2 py-1 rounded-full ${page.protagonist ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}">
++                ${page.protagonist ? '可构建' : '需补主角'}
++              </div>
++            </div>
++          </div>
++        `).join('')}
++      </div>
+     </div>
+   `;
+ }
+ 
+ function initBuildUI(container) {
+   container.querySelector('#build-html-btn').addEventListener('click', () => {
++    syncBuildArtifacts();
+     showToast('HTML 预览已更新到右侧面板', 'success');
+     // Switch to slides tab
+     document.querySelector('[data-tab="slides"]').click();
+     updatePreview();
++    renderStepContent();
+   });
+ 
+   container.querySelector('#build-pptx-btn').addEventListener('click', async () => {
+     const btn = container.querySelector('#build-pptx-btn');
+     const stopLoading = showLoading(btn, '导出中...');
+     try {
++      syncBuildArtifacts();
+       const result = await pptxBuilder.buildPPTX(currentProject);
+       if (result.success) {
+         showToast(`PPTX 导出成功 (${result.method})`, 'success');
+@@ -1287,26 +1556,34 @@ function initQAUI(container) {
+   const findingsDiv = container.querySelector('#findings-list');
+   const rollbackDiv = container.querySelector('#rollback-panel');
+ 
+-  qaEngine.renderFindingsForm(formDiv, () => {
+-    qaEngine.renderFindingsList(findingsDiv);
++  function refreshQAViews() {
++    qaEngine.renderFindingsList(findingsDiv, () => {
++      syncQAArtifacts();
++      refreshQAViews();
++    });
++    qaEngine.renderRollbackPlan(rollbackDiv);
+     updateQASummary();
++  }
++
++  qaEngine.renderFindingsForm(formDiv, () => {
++    syncQAArtifacts();
++    refreshQAViews();
+   });
+ 
+   qaEngine.renderScorecard(scorecardDiv, () => {
++    syncQAArtifacts();
+     updateQASummary();
+   });
+ 
+-  qaEngine.renderFindingsList(findingsDiv, () => {
+-    updateQASummary();
+-  });
++  refreshQAViews();
+ 
+   container.querySelector('#run-qa-btn').addEventListener('click', async () => {
+     const btn = container.querySelector('#run-qa-btn');
+     const stopLoading = showLoading(btn, '评审中...');
+     try {
+       await qaEngine.runAIReview(currentProject);
+-      qaEngine.renderFindingsList(findingsDiv);
+-      updateQASummary();
++      syncQAArtifacts();
++      refreshQAViews();
+       showToast('AI 评审完成', 'success');
+     } catch (err) {
+       showToast('评审失败: ' + err.message, 'error');
+@@ -1317,8 +1594,8 @@ function initQAUI(container) {
+ 
+   container.querySelector('#generate-rollback-btn').addEventListener('click', () => {
+     qaEngine.generateRollbackPlan();
+-    qaEngine.renderRollbackPlan(rollbackDiv);
+-    updateQASummary();
++    syncQAArtifacts();
++    refreshQAViews();
+     showToast('Rollback Plan 已生成', 'success');
+   });
+ }
+@@ -1375,6 +1652,27 @@ function updatePreview() {
+         previewJson.innerHTML = `<pre class="text-xs bg-slate-100 p-3 rounded-lg overflow-auto">${JSON.stringify(value, null, 2)}</pre>`;
+       }
+     }
++  } else if (tabName === 'images') {
++    const previewImages = document.getElementById('preview-images');
++    if (!currentProject) return;
++    const manifest = currentProject.artifacts.asset_manifest?.assets?.length
++      ? currentProject.artifacts.asset_manifest
++      : buildAssetManifestFallback(currentProject);
++    if (!manifest.assets.length) {
++      previewImages.innerHTML = '<div class="text-center py-12 text-slate-400 text-sm col-span-2">暂无图片或素材规划</div>';
++      return;
++    }
++    previewImages.innerHTML = manifest.assets.map(asset => `
++      <div class="rounded-xl border border-slate-200 bg-white p-3">
++        <div class="text-xs text-slate-400 mb-1">${asset.page_id}</div>
++        <div class="text-sm font-semibold text-slate-800 mb-1">${asset.title || asset.description}</div>
++        <div class="text-xs text-slate-500 mb-2">${asset.description || ''}</div>
++        <div class="flex items-center justify-between text-[11px]">
++          <span class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">${asset.type || 'asset'}</span>
++          <span class="px-2 py-0.5 rounded-full ${asset.priority === 'high' ? 'bg-rose-50 text-rose-600' : 'bg-amber-50 text-amber-700'}">${asset.priority || 'medium'}</span>
++        </div>
++      </div>
++    `).join('');
+   }
+ }
+ 
+@@ -1435,6 +1733,7 @@ function initExportModal() {
+         }
+       } else if (index === 0) { // PPTX
+         closeModal();
++        syncBuildArtifacts();
+         pptxBuilder.buildPPTX(currentProject).then(result => {
+           if (result.success) {
+             showToast(`PPTX 导出成功 (${result.method})`, 'success');
+@@ -1444,6 +1743,7 @@ function initExportModal() {
+         });
+       } else if (index === 1) { // HTML
+         closeModal();
++        syncBuildArtifacts();
+         htmlBuilder.buildHTML(currentProject).then(result => {
+           if (result.success) {
+             showToast(`HTML 导出成功 (${result.slideCount} 页)`, 'success');
+@@ -1453,6 +1753,7 @@ function initExportModal() {
+         });
+       } else if (index === 3) { // Montage
+         closeModal();
++        syncBuildArtifacts();
+         pptxBuilder.buildMontage(currentProject).then(result => {
+           if (result.success) {
+             showToast(`缩略图拼图导出成功 (${result.slideCount} 页)`, 'success');
+@@ -1504,7 +1805,13 @@ function initArtifactEditing() {
+     if (e.target.classList.contains('artifact-editor')) {
+       const key = e.target.dataset.artifact;
+       if (key) {
+-        artifactStore.setArtifact(key, e.target.value);
++        artifactStore.setArtifact(key, coerceArtifactValue(key, e.target.value));
++        if (['deck_clean_pages', 'deck_visual_composition', 'deck_theme_tokens'].includes(key)) {
++          syncBuildArtifacts();
++        }
++        if (['deck_review_findings', 'commercial_scorecard', 'review_rollback_plan'].includes(key)) {
++          qaEngine.loadFromArtifacts(currentProject.artifacts);
++        }
+         updatePreview();
+       }
+     }

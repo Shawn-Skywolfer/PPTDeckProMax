@@ -1,0 +1,109 @@
+diff --git a/webapp/js/modules/artifactStore.js b/webapp/js/modules/artifactStore.js
+index e4dbc9e..96d69f9 100644
+--- a/webapp/js/modules/artifactStore.js
++++ b/webapp/js/modules/artifactStore.js
+@@ -96,7 +96,7 @@ class ArtifactStore {
+ 
+   createProject(name, mode = 'expert', outputMode = 'pptx+html') {
+     const now = Date.now();
+-    const project = {
++    const project = this._hydrateProject({
+       id: generateId(),
+       name: name || '未命名项目',
+       createdAt: now,
+@@ -125,7 +125,7 @@ class ArtifactStore {
+         redactionPending: 0
+       },
+       calls: []
+-    };
++    });
+ 
+     this.currentProject = project;
+     this._persist(project);
+@@ -141,9 +141,9 @@ class ArtifactStore {
+ 
+       request.onsuccess = () => {
+         if (request.result) {
+-          this.currentProject = request.result;
++          this.currentProject = this._hydrateProject(request.result);
+           this.emit('project:loaded', request.result);
+-          resolve(request.result);
++          resolve(this.currentProject);
+         } else {
+           reject(new Error('Project not found'));
+         }
+@@ -242,6 +242,17 @@ class ArtifactStore {
+     this.emit('step:changed', step);
+   }
+ 
++  setProjectMeta(data) {
++    if (!this.currentProject) return;
++    this.currentProject = {
++      ...this.currentProject,
++      ...data,
++      updatedAt: Date.now()
++    };
++    this._debouncedSave();
++    this.emit('project:meta-changed', data);
++  }
++
+   setGlobalStatus(status) {
+     if (!this.currentProject) return;
+     this.currentProject.globalStatus = status;
+@@ -257,7 +268,7 @@ class ArtifactStore {
+ 
+   async importProject(jsonString) {
+     try {
+-      const project = JSON.parse(jsonString);
++      const project = this._hydrateProject(JSON.parse(jsonString));
+       if (!project.id || !project.artifacts) {
+         throw new Error('Invalid project format');
+       }
+@@ -294,6 +305,47 @@ class ArtifactStore {
+     });
+   }
+ 
++  _hydrateProject(project) {
++    const now = Date.now();
++    return {
++      createdAt: now,
++      updatedAt: now,
++      mode: 'expert',
++      currentStep: 0,
++      globalStatus: 'briefing',
++      visualLocked: false,
++      reviewIteration: 0,
++      outputMode: 'pptx+html',
++      briefScenario: project?.briefScenario || 'business_proposal',
++      artifacts: JSON.parse(JSON.stringify(EMPTY_ARTIFACTS)),
++      interview: {
++        mode: 'chat',
++        sessionState: 'preparing',
++        claims: [],
++        gaps: [],
++        answers: {},
++        fillRate: 0,
++        redactionPending: 0
++      },
++      calls: [],
++      ...(project || {}),
++      artifacts: {
++        ...JSON.parse(JSON.stringify(EMPTY_ARTIFACTS)),
++        ...(project?.artifacts || {})
++      },
++      interview: {
++        mode: 'chat',
++        sessionState: 'preparing',
++        claims: [],
++        gaps: [],
++        answers: {},
++        fillRate: 0,
++        redactionPending: 0,
++        ...(project?.interview || {})
++      }
++    };
++  }
++
+   // Auto-backup to localStorage every 10 saves
+   _backupCount = 0;
+   async _persistWithBackup(project) {
