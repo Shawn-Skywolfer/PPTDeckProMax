@@ -247,11 +247,13 @@ ul li::before {
 
   _prepareSlides(project) {
     const pages = this._parsePages(project.artifacts.deck_clean_pages);
+    const layoutPages = project.artifacts.layout_manifest?.pages || [];
     return pages.map(p => ({
+      ...(layoutPages.find(page => page.page_id === p.id) || {}),
       page_id: p.id,
       title: p.title,
       content_html: p.content.replace(/\n/g, '<br>'),
-      layout: 'content'
+      layout: this._mapArchetypeToLayout(layoutPages.find(page => page.page_id === p.id)?.archetype)
     }));
   }
 
@@ -275,11 +277,22 @@ ul li::before {
   }
 
   _parseTheme(jsonStr) {
+    if (typeof jsonStr === 'object' && jsonStr !== null) {
+      return jsonStr;
+    }
     try {
       return JSON.parse(jsonStr || '{}');
     } catch (e) {
       return {};
     }
+  }
+
+  _mapArchetypeToLayout(archetype = 'content') {
+    const value = String(archetype || 'content').toLowerCase();
+    if (['chart', 'comparison', 'matrix'].includes(value)) return 'chart';
+    if (['two_column', 'timeline'].includes(value)) return 'two_column';
+    if (['title', 'cover', 'cta'].includes(value)) return 'title';
+    return 'content';
   }
 
   _downloadBlob(blob, filename) {
