@@ -227,7 +227,7 @@ function safeJsonParse(value, fallback = {}) {
 
 function buildAssetManifestFallback(project = currentProject) {
   if (!project) return { assets: [] };
-  const pages = slidePreview.parseCleanPages(project.artifacts.deck_clean_pages || '');
+  const { pages } = resolveRenderablePages(project);
   const visuals = slidePreview.parseVisualComposition(project.artifacts.deck_visual_composition || '');
   return {
     assets: pages.map((page) => {
@@ -245,9 +245,29 @@ function buildAssetManifestFallback(project = currentProject) {
   };
 }
 
+function resolveRenderablePages(project = currentProject) {
+  if (!project) return { pages: [], source: 'none', cleanPages: [], layoutPages: [] };
+  const cleanPages = slidePreview.parseCleanPages(project.artifacts.deck_clean_pages || '');
+  const layoutPages = slidePreview.parseCleanPages(project.artifacts.deck_layout_v1 || '');
+
+  if (cleanPages.length > 1) {
+    return { pages: cleanPages, source: 'clean_pages', cleanPages, layoutPages };
+  }
+
+  if (layoutPages.length > 1) {
+    return { pages: layoutPages, source: 'layout_v1_fallback', cleanPages, layoutPages };
+  }
+
+  return { pages: cleanPages, source: cleanPages.length ? 'clean_pages' : 'layout_v1', cleanPages, layoutPages };
+}
+
+function serializePagesToMarkdown(pages = []) {
+  return pages.map(page => `## 第 ${page.pageNum} 页｜${page.title}\n${page.content || ''}`.trim()).join('\n\n');
+}
+
 function buildDeckRuntimeArtifacts(project = currentProject) {
   if (!project) return null;
-  const pages = slidePreview.parseCleanPages(project.artifacts.deck_clean_pages || '');
+  const { pages, source, cleanPages, layoutPages } = resolveRenderablePages(project);
   const visuals = slidePreview.parseVisualComposition(project.artifacts.deck_visual_composition || '');
   const theme = safeJsonParse(project.artifacts.deck_theme_tokens, {});
   const assetManifest = project.artifacts.asset_manifest?.assets?.length
@@ -273,7 +293,9 @@ function buildDeckRuntimeArtifacts(project = currentProject) {
 
   const previousState = project.artifacts.slide_state || {};
   const renderedSlides = slidePreview.buildRenderedSlides({
-    deck_clean_pages: project.artifacts.deck_clean_pages || '',
+    deck_clean_pages: source === 'layout_v1_fallback'
+      ? serializePagesToMarkdown(pages)
+      : (project.artifacts.deck_clean_pages || ''),
     deck_visual_composition: project.artifacts.deck_visual_composition || '',
     deck_theme_tokens: theme,
     layout_manifest: layoutManifest,
@@ -286,6 +308,11 @@ function buildDeckRuntimeArtifacts(project = currentProject) {
     visual_locked: Boolean(project.artifacts.deck_visual_system),
     review_iteration: previousState.review_iteration || 0,
     output_mode: project.outputMode || previousState.output_mode || 'pptx+html',
+    page_source: source,
+    source_page_count: {
+      clean_pages: cleanPages.length,
+      layout_v1: layoutPages.length
+    },
     pages: pages.map((page) => {
       const layout = layoutManifest.pages.find(item => item.page_id === page.id) || {};
       const assets = assetManifest.assets.filter(asset => asset.page_id === page.id);
@@ -1117,9 +1144,55 @@ function buildStepUI(step) {
       break;
     }
 
-    case 'layout':
-      container.innerHTML = buildArtifactEditor('deck_layout_v1', 'deck_layout_v1.md', '逐页布局草稿...');
+    case 'layout': {
+      const brief = currentProject?.artifacts.deck_brief || '';
+      const vibeBrief = currentProject?.artifacts.deck_vibe_brief || '';
+      const narrativeArc = currentProject?.artifacts.deck_narrative_arc || '';
+      const heroPages = currentProject?.artifacts.deck_hero_pages || '';
+      container.innerHTML = `
+        <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 mb-6">
+          <div class="text-sm font-semibold text-slate-800 mb-2">这一页要做什么</div>
+          <div class="text-xs text-slate-600 leading-6 space-y-1">
+            <div>1. 把叙事弧线拆成逐页草稿，而不是一整篇说明文。</div>
+            <div>2. 每页写清楚：标题、单页结论、版式结构、证据/要点、主视觉建议。</div>
+            <div>3. 每页必须以 <code>## 第 N 页｜页面标题</code> 开头，后面的压缩/构图和 Build 都靠这个分页。</div>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+          <div class="rounded-xl border border-slate-200 bg-white p-4">
+            <div class="text-sm font-semibold text-slate-800 mb-2">推荐版式结构</div>
+            <div class="text-xs text-slate-500 leading-6">左文右图、上结论下证据、大数字卡、双栏对比、时间轴、矩阵图。</div>
+          </div>
+          <div class="rounded-xl border border-slate-200 bg-white p-4">
+            <div class="text-sm font-semibold text-slate-800 mb-2">推荐输出长度</div>
+            <div class="text-xs text-slate-500 leading-6">通常 6-12 页。每页保留 1 个结论和 3-6 条支撑信息即可。</div>
+          </div>
+        </div>
+        <button id="generate-layout-btn" class="w-full px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2 mb-6">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+          生成 Layout 草稿
+        </button>
+        <div class="rounded-xl border border-dashed border-slate-300 bg-white/70 p-4 mb-6">
+          <div class="text-xs font-medium text-slate-700 mb-2">格式示例</div>
+          <pre class="text-[11px] leading-5 text-slate-500 whitespace-pre-wrap">## 第 1 页｜封面 / 核心命题
+单页结论：一句话讲清这页要传达什么
+版式结构：大标题 + 副标题 + 右侧主视觉
+证据/要点：
+- 要点 1
+- 要点 2
+- 要点 3
+主视觉建议：大数字 / 封面图 / 品牌场景图</pre>
+        </div>
+        ${buildArtifactEditor('deck_layout_v1', 'deck_layout_v1.md', '逐页布局草稿...')}
+      `;
+      setTimeout(() => {
+        container.querySelector('#generate-layout-btn').addEventListener('click', () => {
+          const prompt = promptEngine.buildLayoutPrompt(brief, vibeBrief, narrativeArc, heroPages);
+          generateArtifact('brief', 'deck_layout_v1', prompt, container.querySelector('#generate-layout-btn'));
+        });
+      }, 0);
       break;
+    }
 
     case 'compression': {
       const layout = currentProject?.artifacts.deck_layout_v1 || '';
@@ -1142,7 +1215,11 @@ function buildStepUI(step) {
             container.querySelector('#generate-compression-btn'),
             { previewArtifactKey: 'deck_clean_pages' }
           ).then(() => {
-            syncBuildArtifacts();
+            const runtimeArtifacts = syncBuildArtifacts();
+            const counts = runtimeArtifacts?.slide_state?.source_page_count || {};
+            if ((counts.clean_pages || 0) <= 1 && (counts.layout_v1 || 0) > 1) {
+              showToast(`Clean Pages 只识别到 ${counts.clean_pages || 1} 页，已临时按 Layout 的 ${counts.layout_v1} 页骨架预览；建议回看压缩输出格式。`, 'warning');
+            }
           });
         });
       }, 0);
@@ -1489,9 +1566,13 @@ function buildBuildUI() {
   const runtimeArtifacts = buildDeckRuntimeArtifacts() || { layout_manifest: { pages: [] } };
   const pages = runtimeArtifacts.layout_manifest.pages || [];
   const renderedPages = runtimeArtifacts.slide_state?.pages || [];
+  const pageSource = runtimeArtifacts.slide_state?.page_source || 'clean_pages';
+  const sourceCounts = runtimeArtifacts.slide_state?.source_page_count || {};
   buildPreviewPageNum = Math.min(Math.max(buildPreviewPageNum, 1), Math.max(renderedPages.length, 1));
   const activePage = renderedPages.find(page => page.page_num === buildPreviewPageNum) || renderedPages[0] || null;
-  const sourceHint = pages.length === 1
+  const sourceHint = pageSource === 'layout_v1_fallback'
+    ? `当前 deck_clean_pages 只识别到 ${sourceCounts.clean_pages || 1} 页，系统临时按 deck_layout_v1 的 ${sourceCounts.layout_v1 || pages.length} 页骨架来预览。建议回到「内容压缩 + 视觉构图」修正分页输出。`
+    : pages.length === 1
     ? '当前只识别到 1 页。通常说明 `内容压缩 + 视觉构图` 里的 `deck_clean_pages.md` 没有正确分页。'
     : `当前从 deck_clean_pages 共识别到 ${pages.length} 页。`;
   return `

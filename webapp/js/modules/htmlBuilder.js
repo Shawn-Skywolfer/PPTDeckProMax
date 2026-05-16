@@ -7,7 +7,7 @@ import { parseDeckPages } from './deckParsers.js';
 class HTMLBuilder {
   async buildHTML(project) {
     try {
-      const pages = this._parsePages(project.artifacts.deck_clean_pages);
+      const pages = this._getRenderablePages(project);
       if (pages.length === 0) {
         return { success: false, error: 'No pages found' };
       }
@@ -22,6 +22,18 @@ class HTMLBuilder {
       console.error('HTML build failed:', err);
       return { success: false, error: err.message };
     }
+  }
+
+  _getRenderablePages(project) {
+    const builtPages = project.artifacts.slide_state?.pages || [];
+    if (builtPages.length > 0) {
+      return builtPages.map(page => ({
+        id: page.page_id,
+        title: page.title,
+        content: page.content || ''
+      }));
+    }
+    return this._parsePages(project.artifacts.deck_clean_pages);
   }
 
   _generateDeckHTML(pages, project, theme, layoutManifest = { pages: [] }) {

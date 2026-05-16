@@ -6,10 +6,15 @@ function normalizeMarkdown(markdown) {
   return String(markdown || '').replace(/\r\n/g, '\n').trim();
 }
 
+function stripBulletPrefix(line) {
+  return line.replace(/^[-*•]\s*/, '');
+}
+
 function matchExplicitPageHeading(line) {
-  return line.match(/^#{1,2}\s*(?:P(?:age)?|Slide)\s*(\d{1,3})[\s:：.\-、]*(.*)$/i) ||
-    line.match(/^#{1,2}\s*第\s*(\d{1,3})\s*页[\s:：.\-、]*(.*)$/i) ||
-    line.match(/^#{1,2}\s*(\d{1,3})[\s:：.\-、]+(.+)$/);
+  const normalized = stripBulletPrefix(String(line || '').trim()).replace(/[|｜]/g, ' ');
+  return normalized.match(/^#{0,3}\s*(?:P(?:age)?|Slide)\s*(\d{1,3})[\s:：.\-、]*([^]*)$/i) ||
+    normalized.match(/^#{0,3}\s*第\s*(\d{1,3})\s*页[\s:：.\-、]*([^]*)$/i) ||
+    normalized.match(/^#{0,3}\s*(\d{1,3})[\s:：.\-、]+(.+)$/);
 }
 
 function matchGenericHeading(line) {

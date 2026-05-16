@@ -83,7 +83,7 @@ class PPTXBuilder {
         background: { color: 'FFFFFF' }
       });
 
-      const pages = this._parsePages(project.artifacts.deck_clean_pages);
+      const pages = this._getRenderablePages(project);
       pages.forEach((page, idx) => {
         const slide = pptx.addSlide();
         slide.background = { color: idx === 0 ? primary : 'FFFFFF' };
@@ -256,6 +256,18 @@ ul li::before {
 
   _parsePages(markdown) {
     return parseDeckPages(markdown);
+  }
+
+  _getRenderablePages(project) {
+    const builtPages = project.artifacts.slide_state?.pages || [];
+    if (builtPages.length > 0) {
+      return builtPages.map(page => ({
+        id: page.page_id,
+        title: page.title,
+        content: page.content || ''
+      }));
+    }
+    return this._parsePages(project.artifacts.deck_clean_pages);
   }
 
   _parseTheme(jsonStr) {

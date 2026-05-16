@@ -287,7 +287,7 @@ class SlidePreview {
               <span class="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">${archetype.name}</span>
             </div>
             <h4 class="font-bold text-sm text-slate-800 mb-1 line-clamp-2">${page.title}</h4>
-            <div class="text-[11px] text-slate-500 mb-2">素材 ${mergedVisual.assets.length} 项 · 主视觉 ${mergedVisual.protagonist || '待补充'}</div>
+            <div class="text-[11px] text-slate-500 mb-2">素材 ${mergedVisual.assets.length} 项 · 视觉焦点 ${mergedVisual.protagonist || '待补充'}</div>
             <div class="text-[11px] text-slate-500 line-clamp-3 whitespace-pre-wrap">${page.content || '暂无正文内容'}</div>
           </div>
         </div>
@@ -296,12 +296,19 @@ class SlidePreview {
   }
 
   updatePreview(container, artifacts) {
-    const pages = this.parseCleanPages(artifacts.deck_clean_pages);
+    const builtSlides = artifacts.slide_state?.pages || [];
+    const pages = builtSlides.length > 0
+      ? builtSlides.map(page => ({
+        id: page.page_id,
+        pageNum: page.page_num,
+        title: page.title,
+        content: page.content || ''
+      }))
+      : this.parseCleanPages(artifacts.deck_clean_pages);
     const visuals = this.parseVisualComposition(artifacts.deck_visual_composition);
     const theme = this.parseThemeTokens(artifacts.deck_theme_tokens);
     const layoutManifest = artifacts.layout_manifest || { pages: [] };
     const assetManifest = artifacts.asset_manifest || { assets: [] };
-    const builtSlides = artifacts.slide_state?.pages || [];
 
     if (pages.length === 0) {
       container.innerHTML = '<div class="text-center py-12 text-slate-400 text-sm">尚未生成幻灯片内容<br>请在「Clean Pages」步骤定义页面</div>';
