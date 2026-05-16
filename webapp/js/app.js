@@ -19,6 +19,7 @@ let currentProject = null;
 let interviewManager = null;
 let slidePreview = new SlidePreview();
 let qaEngine = new QAEngine();
+let buildPreviewPageNum = 1;
 
 // ===== DOM Elements =====
 const els = {
@@ -1487,6 +1488,12 @@ function initRedactionUI(container) {
 function buildBuildUI() {
   const runtimeArtifacts = buildDeckRuntimeArtifacts() || { layout_manifest: { pages: [] } };
   const pages = runtimeArtifacts.layout_manifest.pages || [];
+  const renderedPages = runtimeArtifacts.slide_state?.pages || [];
+  buildPreviewPageNum = Math.min(Math.max(buildPreviewPageNum, 1), Math.max(renderedPages.length, 1));
+  const activePage = renderedPages.find(page => page.page_num === buildPreviewPageNum) || renderedPages[0] || null;
+  const sourceHint = pages.length === 1
+    ? '当前只识别到 1 页。通常说明 `内容压缩 + 视觉构图` 里的 `deck_clean_pages.md` 没有正确分页。'
+    : `当前从 deck_clean_pages 共识别到 ${pages.length} 页。`;
   return `
     <div class="space-y-6">
       <div class="flex items-center justify-between">
@@ -1519,13 +1526,54 @@ function buildBuildUI() {
           <div class="text-xs text-slate-500 mt-1">规划素材条目</div>
         </div>
       </div>
+      <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <div class="text-sm font-semibold text-slate-800">分页识别结果</div>
+            <div class="text-xs text-slate-500 mt-1">${sourceHint}</div>
+          </div>
+          ${pages.length === 1 ? `
+            <button id="go-check-clean-pages-btn" class="px-3 py-1.5 text-xs bg-white border border-slate-200 hover:border-indigo-300 text-slate-700 rounded-lg transition-all">
+              去检查 deck_clean_pages
+            </button>
+          ` : ''}
+        </div>
+      </div>
+      <div class="rounded-xl border border-slate-200 bg-white overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-4">
+          <div>
+            <div class="text-sm font-semibold text-slate-800">内嵌页面预览</div>
+            <div class="text-xs text-slate-500 mt-1">${activePage ? `当前第 ${activePage.page_num} / ${renderedPages.length} 页：${activePage.title}` : '暂无可预览页面'}</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button id="build-preview-prev" class="px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg transition-all ${buildPreviewPageNum <= 1 ? 'text-slate-300 cursor-not-allowed' : 'hover:border-indigo-300 text-slate-700'}" ${buildPreviewPageNum <= 1 ? 'disabled' : ''}>
+              上一页
+            </button>
+            <div class="text-xs text-slate-500 min-w-16 text-center">${activePage ? `${buildPreviewPageNum} / ${renderedPages.length}` : '-- / --'}</div>
+            <button id="build-preview-next" class="px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg transition-all ${buildPreviewPageNum >= renderedPages.length ? 'text-slate-300 cursor-not-allowed' : 'hover:border-indigo-300 text-slate-700'}" ${buildPreviewPageNum >= renderedPages.length ? 'disabled' : ''}>
+              下一页
+            </button>
+          </div>
+        </div>
+        <div class="p-4 bg-slate-100">
+          ${activePage?.html ? `
+            <div class="mx-auto max-w-5xl">
+              <div class="aspect-video bg-slate-200 rounded-2xl overflow-hidden border border-slate-200 shadow-sm">
+                ${activePage.html}
+              </div>
+            </div>
+          ` : `
+            <div class="text-center py-16 text-slate-400 text-sm">暂无页面渲染结果，请先刷新全部页面预览</div>
+          `}
+        </div>
+      </div>
       <div id="build-pages-list" class="space-y-3">
         ${pages.length === 0 ? `
           <div class="p-4 bg-slate-50 rounded-lg text-center text-slate-400 text-sm">
             暂无页面，请先在「Clean Pages」步骤定义内容
           </div>
         ` : pages.map(page => `
-          <div class="p-4 bg-white border border-slate-200 rounded-xl">
+          <button type="button" class="build-page-item w-full text-left p-4 bg-white border rounded-xl transition-all ${page.page_num === buildPreviewPageNum ? 'border-indigo-300 ring-2 ring-indigo-500/10' : 'border-slate-200 hover:border-indigo-200'}" data-page-num="${page.page_num}">
             <div class="flex items-start justify-between gap-4">
               <div>
                 <div class="text-sm font-semibold text-slate-800">${page.page_num}. ${page.title}</div>
@@ -1535,7 +1583,7 @@ function buildBuildUI() {
                 ${page.protagonist ? '已可预览' : '已自动补全'}
               </div>
             </div>
-          </div>
+          </button>
         `).join('')}
       </div>
     </div>
@@ -1546,11 +1594,40 @@ function initBuildUI(container) {
   container.querySelector('#build-html-btn').addEventListener('click', () => {
     const runtimeArtifacts = syncBuildArtifacts();
     const pageCount = runtimeArtifacts?.layout_manifest?.pages?.length || 0;
+    buildPreviewPageNum = Math.min(buildPreviewPageNum, Math.max(pageCount, 1));
     showToast(`已刷新 ${pageCount} 页 HTML 预览`, 'success');
     // Switch to slides tab
     document.querySelector('[data-tab="slides"]').click();
     updatePreview();
     renderStepContent();
+  });
+
+  container.querySelector('#build-preview-prev')?.addEventListener('click', () => {
+    buildPreviewPageNum = Math.max(1, buildPreviewPageNum - 1);
+    renderStepContent();
+  });
+
+  container.querySelector('#build-preview-next')?.addEventListener('click', () => {
+    const pageCount = currentProject?.artifacts?.slide_state?.pages?.length || 1;
+    buildPreviewPageNum = Math.min(pageCount, buildPreviewPageNum + 1);
+    renderStepContent();
+  });
+
+  container.querySelectorAll('.build-page-item').forEach(item => {
+    item.addEventListener('click', () => {
+      buildPreviewPageNum = parseInt(item.dataset.pageNum, 10) || 1;
+      renderStepContent();
+    });
+  });
+
+  container.querySelector('#go-check-clean-pages-btn')?.addEventListener('click', () => {
+    workflowEngine.setStep(5);
+    artifactStore.setStep(5);
+    renderStepContent();
+    renderStepper();
+    requestAnimationFrame(() => {
+      document.querySelector('[data-artifact="deck_clean_pages"]')?.focus();
+    });
   });
 
   container.querySelector('#build-pptx-btn').addEventListener('click', async () => {
