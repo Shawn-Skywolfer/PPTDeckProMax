@@ -1,0 +1,18 @@
+diff --git a/package.json b/package.json
+index f2eab14..87fbba7 100644
+--- a/package.json
++++ b/package.json
+@@ -1,5 +1,13 @@
+ {
++  "name": "ppt-deck-pro-max",
++  "private": true,
++  "scripts": {
++    "test:e2e": "playwright test",
++    "test:e2e:headed": "playwright test --headed",
++    "serve:webapp": "python3 webapp/start_server.py"
++  },
+   "dependencies": {
++    "@playwright/test": "^1.60.0",
+     "playwright": "^1.60.0"
+   }
+ }

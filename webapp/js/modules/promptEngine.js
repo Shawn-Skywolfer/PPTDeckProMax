@@ -247,9 +247,45 @@ class PromptEngine {
     };
   }
 
+  buildVibePrompt(brief) {
+    return {
+      system: `你是 Vibe AI。你的任务是基于 deck_brief.md 生成 deck_vibe_brief.md。
+
+输出目标：
+- 明确整体气质、品牌语气、配色方向、字体建议、版式节奏、图形语言
+- 给出可执行的视觉指引，而不是泛泛而谈的形容词
+
+约束：
+- 不要重写商业叙事
+- 不要输出 JSON
+- 使用 Markdown 输出
+- 必须覆盖 mood、colors、typography、layout rhythm、iconography、chart style 六个部分`,
+      user: `请基于以下 Brief 生成 deck_vibe_brief.md：
+
+${brief}`
+    };
+  }
+
   buildVisualSystemPrompt(artifacts) {
     return {
-      system: ROLE_PROMPTS.visual.system,
+      system: `${ROLE_PROMPTS.visual.system}
+
+请严格输出以下 5 个区块，区块名必须完全一致，不要添加代码围栏：
+<<<deck_visual_system>>>
+[Markdown 内容]
+<<<END>>>
+<<<deck_component_tokens>>>
+[Markdown 内容]
+<<<END>>>
+<<<deck_theme_tokens>>>
+[纯 JSON 内容]
+<<<END>>>
+<<<deck_geometry_rules>>>
+[Markdown 内容]
+<<<END>>>
+<<<deck_page_skeletons>>>
+[Markdown 内容]
+<<<END>>>`,
       user: ROLE_PROMPTS.visual.buildUser(artifacts)
     };
   }
@@ -289,7 +325,15 @@ class PromptEngine {
 约束：
 - 每页归属一个 beat 类型（setup/tension/resolution/proof/action）
 - 至少定义一个信心拐点
-- Hero page 选择必须与 beat 类型对齐（tension beats 和 strong proof beats 优先）`,
+- Hero page 选择必须与 beat 类型对齐（tension beats 和 strong proof beats 优先）
+
+请严格输出以下 2 个区块，区块名必须完全一致：
+<<<deck_narrative_arc>>>
+[Markdown 内容]
+<<<END>>>
+<<<deck_hero_pages>>>
+[Markdown 内容]
+<<<END>>>`,
       user: `Brief：\n${brief}\n\nExpert Context：\n${expertContext || '无'}\n\n请输出叙事弧线和 Hero Pages。`
     };
   }
@@ -309,8 +353,50 @@ class PromptEngine {
 - 识别核心数据关系（comparison/gap/flow/loop/category/metric）
 - 标记 illustrative=true 的示例数据
 - 定义每个概念元素的 icon 名称
-- 定义视觉权重分布（60%/30%/10%）`,
+- 定义视觉权重分布（60%/30%/10%）
+
+请严格输出以下 2 个区块，区块名必须完全一致：
+<<<deck_clean_pages>>>
+[Markdown 内容]
+<<<END>>>
+<<<deck_visual_composition>>>
+[Markdown 内容]
+<<<END>>>`,
       user: `Layout：\n${layout}\n\nBrief：\n${brief}\n\n请输出 deck_clean_pages.md 和 deck_visual_composition.md。`
+    };
+  }
+
+  buildAssetsPrompt(cleanPages, visualComposition) {
+    return {
+      system: `你是 Assets Planner AI。你的任务是基于 Clean Pages 和 Visual Composition 生成素材规划。
+
+输出目标：
+- deck_asset_plan.md：逐页说明所需素材、来源建议、优先级、是否可用占位图
+- asset_manifest.json：结构化素材清单
+
+asset_manifest.json 结构要求：
+{
+  "assets": [
+    {
+      "page_id": "slide_01",
+      "title": "页面标题",
+      "type": "chart|screenshot|diagram|icon|photo|metric",
+      "description": "素材说明",
+      "source_hint": "来源建议",
+      "priority": "high|medium|low",
+      "placeholder_allowed": true
+    }
+  ]
+}
+
+请严格输出以下 2 个区块，区块名必须完全一致，不要添加代码围栏：
+<<<deck_asset_plan>>>
+[Markdown 内容]
+<<<END>>>
+<<<asset_manifest>>>
+[纯 JSON 内容]
+<<<END>>>`,
+      user: `Clean Pages：\n${cleanPages}\n\nVisual Composition：\n${visualComposition}\n\n请输出 deck_asset_plan.md 和 asset_manifest.json。`
     };
   }
 }

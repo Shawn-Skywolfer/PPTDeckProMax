@@ -1,0 +1,70 @@
+diff --git a/webapp/js/modules/slidePreview.js b/webapp/js/modules/slidePreview.js
+index 44d20d7..2233a8f 100644
+--- a/webapp/js/modules/slidePreview.js
++++ b/webapp/js/modules/slidePreview.js
+@@ -74,6 +74,10 @@ class SlidePreview {
+   }
+ 
+   parseThemeTokens(jsonStr) {
++    if (typeof jsonStr === 'object' && jsonStr !== null) {
++      this.theme = jsonStr;
++      return this.theme;
++    }
+     try {
+       this.theme = JSON.parse(jsonStr || '{}');
+     } catch (e) {
+@@ -82,7 +86,7 @@ class SlidePreview {
+     return this.theme;
+   }
+ 
+-  renderSlides(pages, visuals, theme) {
++  renderSlides(pages, visuals, theme, layoutManifest = { pages: [] }, assetManifest = { assets: [] }) {
+     if (pages.length === 0) {
+       return '<div class="text-center py-12 text-slate-400 text-sm">尚未生成幻灯片内容</div>';
+     }
+@@ -92,8 +96,15 @@ class SlidePreview {
+     const secondary = colors.secondary || '#8b5cf6';
+ 
+     return pages.map((page, idx) => {
++      const layout = layoutManifest.pages.find(item => item.page_id === page.id) || {};
+       const visual = visuals.find(v => v.pageNum === page.pageNum) || {};
+-      const archetype = ARCHETYPES[visual.archetype] || ARCHETYPES.content;
++      const mergedVisual = {
++        ...visual,
++        archetype: visual.archetype || layout.archetype || 'content',
++        protagonist: visual.protagonist || layout.protagonist || '',
++        assets: assetManifest.assets.filter(asset => asset.page_id === page.id)
++      };
++      const archetype = ARCHETYPES[mergedVisual.archetype] || ARCHETYPES.content;
+ 
+       return `
+         <div class="slide-card ${archetype.bg} ${archetype.text} p-5 relative group cursor-pointer" data-page="${page.id}">
+@@ -103,8 +114,9 @@ class SlidePreview {
+           <div class="h-full flex flex-col">
+             <div class="text-xs opacity-60 mb-1">Slide ${page.pageNum}</div>
+             <h4 class="font-bold text-sm mb-2 line-clamp-2">${page.title}</h4>
++            <div class="text-[11px] opacity-60 mb-2">素材 ${mergedVisual.assets.length} 项</div>
+             <div class="flex-1 overflow-hidden">
+-              ${this.renderVisualPlaceholder(visual, primary, secondary)}
++              ${this.renderVisualPlaceholder(mergedVisual, primary, secondary)}
+             </div>
+           </div>
+         </div>
+@@ -197,6 +209,8 @@ class SlidePreview {
+     const pages = this.parseCleanPages(artifacts.deck_clean_pages);
+     const visuals = this.parseVisualComposition(artifacts.deck_visual_composition);
+     const theme = this.parseThemeTokens(artifacts.deck_theme_tokens);
++    const layoutManifest = artifacts.layout_manifest || { pages: [] };
++    const assetManifest = artifacts.asset_manifest || { assets: [] };
+ 
+     if (pages.length === 0) {
+       container.innerHTML = '<div class="text-center py-12 text-slate-400 text-sm">尚未生成幻灯片内容<br>请在「Clean Pages」步骤定义页面</div>';
+@@ -205,7 +219,7 @@ class SlidePreview {
+ 
+     container.innerHTML = `
+       <div class="space-y-4">
+-        ${this.renderSlides(pages, visuals, theme)}
++        ${this.renderSlides(pages, visuals, theme, layoutManifest, assetManifest)}
+       </div>
+     `;
+ 

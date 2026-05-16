@@ -1,0 +1,84 @@
+diff --git a/README.md b/README.md
+index 1890e1b..d12241a 100644
+--- a/README.md
++++ b/README.md
+@@ -21,9 +21,9 @@ PPT Deck Pro Max 不是模板填充工具，而是一个**结构化内容生产
+ | 层级 | 技术 |
+ |------|------|
+ | 前端 | 原生 ES Modules + Tailwind CSS + Marked.js + Chart.js |
+-| 后端 | Python HTTP 服务器（`start_server.py`） |
+-| 构建 | Python `pptx` 库生成 PPTX |
+-| 存储 | localStorage（项目数据 + Provider 配置） |
++| 后端 | `start_server.py` 静态服务 + `backend.py` 可选构建服务 |
++| 构建 | 浏览器 HTML 预览 + Python `python-pptx`/浏览器回退导出 PPTX |
++| 存储 | IndexedDB（项目数据）+ localStorage（Provider 配置与备份） |
+ | AI 调用 | OpenAI-compatible API（支持 AIHubMix / DeepSeek / OpenAI / 通义千问等） |
+ 
+ **模块清单：**
+@@ -48,6 +48,7 @@ PPT Deck Pro Max 不是模板填充工具，而是一个**结构化内容生产
+ - Python 3.8+
+ - Chrome / Edge / Firefox 最新版
+ - 可访问外部 LLM API（需自备 API Key）
++- 如需高质量 PPTX / 拼图导出，需安装 `requirements.txt` 中依赖并启动 `backend.py`
+ 
+ ### 3.2 启动步骤
+ 
+@@ -56,7 +57,12 @@ PPT Deck Pro Max 不是模板填充工具，而是一个**结构化内容生产
+ cd PPT-Deck-Pro-Max/webapp
+ ```
+ 
+-**步骤 2：启动本地服务器（必须）**
++**步骤 2：安装可选依赖（推荐）**
++```bash
++pip install -r ../requirements.txt
++```
++
++**步骤 3：启动静态服务器（必须）**
+ ```bash
+ python start_server.py
+ ```
+@@ -68,12 +74,24 @@ Serving HTTP on :: port 8080 (http://localhost:8080/) ...
+ 
+ > ⚠️ **重要**：必须使用 `http://localhost:8080` 访问，不能直接用文件协议 `file://` 打开 `index.html`，否则 ES Modules 会因 CORS 报错，所有按钮无响应。
+ 
+-**步骤 3：浏览器打开**
++**步骤 4：可选启动后端构建服务（推荐）**
++```bash
++python backend.py
++```
++
++默认地址：
++```
++http://localhost:8765
++```
++
++> 不启动后端时，应用仍可使用，但 PPTX 会回退到浏览器简版导出，缩略图拼图功能不可用。
++
++**步骤 5：浏览器打开**
+ ```
+ http://localhost:8080
+ ```
+ 
+-**步骤 4：配置 Provider（首次使用必须）**
++**步骤 6：配置 Provider（首次使用必须）**
+ 1. 点击页面右上角 **Provider** 按钮
+ 2. 选择预设（AIHubMix / OpenAI / DeepSeek / 通义千问 / 自定义）
+ 3. 输入 BaseURL 和 APIKey
+@@ -419,6 +437,7 @@ http://localhost:8080
+ - 右侧面板支持 **Markdown / 幻灯片 / JSON / 图片** 四种预览模式
+ - 拖动中间分隔线可自由调整预览面板宽度（无上限限制）
+ - Markdown 预览支持自动换行，不溢出容器
++- 图片标签页会展示素材规划与图片需求卡片
+ 
+ ### 7.2 步骤导航
+ 
+@@ -429,7 +448,8 @@ http://localhost:8080
+ ### 7.3 产物编辑
+ 
+ - 每个步骤的文本框支持实时编辑
+-- 内容自动保存到 localStorage
++- 项目内容自动保存到 IndexedDB
++- Provider 配置保存到 localStorage
+ - 刷新浏览器后数据不丢失
+ 
+ ---

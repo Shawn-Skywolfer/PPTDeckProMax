@@ -1,0 +1,48 @@
+diff --git a/webapp/js/modules/htmlBuilder.js b/webapp/js/modules/htmlBuilder.js
+index 5a41f51..c32ae51 100644
+--- a/webapp/js/modules/htmlBuilder.js
++++ b/webapp/js/modules/htmlBuilder.js
+@@ -11,7 +11,7 @@ class HTMLBuilder {
+       }
+ 
+       const theme = this._parseTheme(project.artifacts.deck_theme_tokens);
+-      const html = this._generateDeckHTML(pages, project, theme);
++      const html = this._generateDeckHTML(pages, project, theme, project.artifacts.layout_manifest || { pages: [] });
+ 
+       const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+       this._downloadBlob(blob, `${project.name}.html`);
+@@ -22,13 +22,14 @@ class HTMLBuilder {
+     }
+   }
+ 
+-  _generateDeckHTML(pages, project, theme) {
++  _generateDeckHTML(pages, project, theme, layoutManifest = { pages: [] }) {
+     const colors = theme.colors || {};
+     const primary = colors.primary || '#6366f1';
+     const textDark = colors.text_dark || '#1e293b';
+     const bg = colors.bg || '#ffffff';
+ 
+     const slidesHtml = pages.map((page, idx) => {
++      const layout = layoutManifest.pages.find(item => item.page_id === page.id) || {};
+       const lines = page.content.split('\n').filter(l => l.trim());
+       const contentHtml = lines.map(l => {
+         const trimmed = l.trim().replace(/^[-*•]\s*/, '');
+@@ -48,7 +49,7 @@ class HTMLBuilder {
+   <div class="slide-inner" style="background:${isFirst ? primary : bg};color:${isFirst ? '#fff' : textDark};">
+     <div class="slide-header">
+       <div class="accent-bar" style="background:${isFirst ? '#fff' : primary};"></div>
+-      <span class="slide-number" style="color:${isFirst ? 'rgba(255,255,255,0.6)' : '#94a3b8'};">${String(idx + 1).padStart(2, '0')}</span>
++      <span class="slide-number" style="color:${isFirst ? 'rgba(255,255,255,0.6)' : '#94a3b8'};">${String(idx + 1).padStart(2, '0')} · ${layout.archetype || 'content'}</span>
+     </div>
+     <h1 class="slide-title" style="font-size:${isFirst ? '2.8em' : '2em'};margin:16px 0 24px;line-height:1.2;font-weight:700;">${page.title}</h1>
+     <div class="slide-body">${contentHtml}</div>
+@@ -194,6 +195,9 @@ html, body { height: 100%; overflow: hidden; background: #0f172a; font-family: '
+   }
+ 
+   _parseTheme(jsonStr) {
++    if (typeof jsonStr === 'object' && jsonStr !== null) {
++      return jsonStr;
++    }
+     try {
+       return JSON.parse(jsonStr || '{}');
+     } catch (e) {

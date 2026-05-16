@@ -7,9 +7,8 @@ import { aiCaller } from './aiCaller.js';
 import { promptEngine } from './promptEngine.js';
 
 class QAEngine {
-  constructor() {
-    this.findings = [];
-    this.scorecard = {
+  constructor(initialArtifacts = null) {
+    this.defaultScorecard = {
       overall_score: null,
       dimensions: {
         audience_fit: 3,
@@ -20,7 +19,37 @@ class QAEngine {
         commercial_ask: 3
       }
     };
+    this.findings = [];
     this.rollbackPlan = null;
+    this.scorecard = JSON.parse(JSON.stringify(this.defaultScorecard));
+    this.loadFromArtifacts(initialArtifacts);
+  }
+
+  loadFromArtifacts(artifacts = {}) {
+    this.findings = Array.isArray(artifacts?.deck_review_findings)
+      ? JSON.parse(JSON.stringify(artifacts.deck_review_findings))
+      : [];
+
+    this.scorecard = {
+      ...JSON.parse(JSON.stringify(this.defaultScorecard)),
+      ...(artifacts?.commercial_scorecard || {}),
+      dimensions: {
+        ...this.defaultScorecard.dimensions,
+        ...(artifacts?.commercial_scorecard?.dimensions || {})
+      }
+    };
+
+    this.rollbackPlan = artifacts?.review_rollback_plan && Object.keys(artifacts.review_rollback_plan).length > 0
+      ? JSON.parse(JSON.stringify(artifacts.review_rollback_plan))
+      : null;
+  }
+
+  exportArtifacts() {
+    return {
+      deck_review_findings: JSON.parse(JSON.stringify(this.findings)),
+      commercial_scorecard: JSON.parse(JSON.stringify(this.scorecard)),
+      review_rollback_plan: this.rollbackPlan ? JSON.parse(JSON.stringify(this.rollbackPlan)) : {}
+    };
   }
 
   addFinding(finding) {
@@ -293,6 +322,7 @@ class QAEngine {
       btn.addEventListener('click', () => {
         this.removeFinding(btn.dataset.id);
         this.renderFindingsList(container, onDelete);
+        onDelete?.();
       });
     });
   }
