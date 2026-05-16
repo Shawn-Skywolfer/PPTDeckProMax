@@ -80,13 +80,36 @@ class SlidePreview {
       .map(line => line.replace(/^[-*•]\s*/, ''));
   }
 
+  inferProtagonist(page, visual = {}) {
+    if (visual.protagonist) return visual.protagonist;
+    const title = String(page?.title || '');
+    const content = String(page?.content || '');
+    const archetype = String(visual?.archetype || '').toLowerCase();
+    const combined = `${title}\n${content}`;
+
+    if (visual.chart || ['chart', 'comparison', 'matrix'].includes(archetype) || /(增长|趋势|同比|环比|市场|份额|收入|利润|ROI|转化|图表|数据)/i.test(combined)) {
+      return `核心数据图表：${title || '关键指标'}`;
+    }
+    if (['two_column', 'timeline'].includes(archetype) || /(阶段|里程碑|路径|推进|计划|时间|路线图)/i.test(combined)) {
+      return `双栏路径图：${title || '行动路径'}`;
+    }
+    if (['big_number', 'cta'].includes(archetype) || /(目标|结果|关键指标|突破|提升|增长)/i.test(combined)) {
+      return `关键数字卡：${title || '核心结果'}`;
+    }
+    if (/(架构|流程|系统|模块|能力|方案)/i.test(combined)) {
+      return `结构示意图：${title || '核心结构'}`;
+    }
+    return `信息卡组：${title || '核心结论'}`;
+  }
+
   getMergedVisual(page, visuals, layoutManifest = { pages: [] }, assetManifest = { assets: [] }) {
     const layout = layoutManifest.pages.find(item => item.page_id === page.id) || {};
     const visual = visuals.find(v => v.pageNum === page.pageNum) || {};
+    const protagonist = visual.protagonist || layout.protagonist || this.inferProtagonist(page, visual);
     return {
       ...visual,
       archetype: visual.archetype || layout.archetype || 'content',
-      protagonist: visual.protagonist || layout.protagonist || '',
+      protagonist,
       weight: visual.weight || layout.weight || '',
       chart: visual.chart || layout.chart || '',
       assets: assetManifest.assets.filter(asset => asset.page_id === page.id)
@@ -107,7 +130,7 @@ class SlidePreview {
         page_num: page.pageNum,
         title: page.title,
         archetype: visual.archetype || 'content',
-        protagonist: visual.protagonist || '',
+        protagonist: visual.protagonist || this.inferProtagonist(page, visual),
         assets: visual.assets,
         html: this.renderBuiltSlide(page, visual, theme, projectName)
       };

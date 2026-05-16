@@ -256,12 +256,13 @@ function buildDeckRuntimeArtifacts(project = currentProject) {
   const layoutManifest = {
     pages: pages.map((page) => {
       const visual = visuals.find(v => v.pageNum === page.pageNum) || {};
+      const protagonist = visual.protagonist || slidePreview.inferProtagonist(page, visual);
       return {
         page_id: page.id,
         page_num: page.pageNum,
         title: page.title,
         archetype: visual.archetype || 'content',
-        protagonist: visual.protagonist || '',
+        protagonist,
         weight: visual.weight || '',
         chart: visual.chart || '',
         asset_count: assetManifest.assets.filter(asset => asset.page_id === page.id).length
@@ -294,7 +295,7 @@ function buildDeckRuntimeArtifacts(project = currentProject) {
         title: page.title,
         status: 'ready',
         archetype: layout.archetype || 'content',
-        protagonist: layout.protagonist || '',
+        protagonist: layout.protagonist || slidePreview.inferProtagonist(page, layout),
         content: page.content,
         assets,
         html: rendered.html || ''
@@ -1489,11 +1490,14 @@ function buildBuildUI() {
   return `
     <div class="space-y-6">
       <div class="flex items-center justify-between">
-        <h3 class="text-lg font-semibold text-slate-800">构建 Deck</h3>
+        <div>
+          <h3 class="text-lg font-semibold text-slate-800">构建 Deck</h3>
+          <p class="text-xs text-slate-500 mt-1">会一次性刷新全部页面预览，不需要逐页点击生成。</p>
+        </div>
         <div class="flex gap-2">
           <button id="build-html-btn" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-all flex items-center gap-2">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/></svg>
-            构建 HTML 预览
+            刷新全部页面预览
           </button>
           <button id="build-pptx-btn" class="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium rounded-lg transition-all flex items-center gap-2">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10l2-9H5l2 9zm0 0L5 9h14l-2 12m-5-6v6m0 0H9m3 0h3"/></svg>
@@ -1508,7 +1512,7 @@ function buildBuildUI() {
         </div>
         <div class="p-4 bg-white border border-slate-200 rounded-xl">
           <div class="text-2xl font-bold text-slate-800">${pages.filter(p => p.protagonist).length}</div>
-          <div class="text-xs text-slate-500 mt-1">已定义视觉主角</div>
+          <div class="text-xs text-slate-500 mt-1">已准备视觉焦点</div>
         </div>
         <div class="p-4 bg-white border border-slate-200 rounded-xl">
           <div class="text-2xl font-bold text-slate-800">${pages.reduce((sum, p) => sum + (p.asset_count || 0), 0)}</div>
@@ -1525,10 +1529,10 @@ function buildBuildUI() {
             <div class="flex items-start justify-between gap-4">
               <div>
                 <div class="text-sm font-semibold text-slate-800">${page.page_num}. ${page.title}</div>
-                <div class="text-xs text-slate-500 mt-1">Archetype: ${page.archetype || 'content'} · 视觉主角: ${page.protagonist || '待补充'}</div>
+                <div class="text-xs text-slate-500 mt-1">页面类型: ${page.archetype || 'content'} · 视觉焦点: ${page.protagonist || '系统自动补全'}</div>
               </div>
-              <div class="text-xs px-2 py-1 rounded-full ${page.protagonist ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}">
-                ${page.protagonist ? '可构建' : '需补主角'}
+              <div class="text-xs px-2 py-1 rounded-full bg-emerald-50 text-emerald-700">
+                ${page.protagonist ? '已可预览' : '已自动补全'}
               </div>
             </div>
           </div>
@@ -1540,8 +1544,9 @@ function buildBuildUI() {
 
 function initBuildUI(container) {
   container.querySelector('#build-html-btn').addEventListener('click', () => {
-    syncBuildArtifacts();
-    showToast('HTML 预览已更新到右侧面板', 'success');
+    const runtimeArtifacts = syncBuildArtifacts();
+    const pageCount = runtimeArtifacts?.layout_manifest?.pages?.length || 0;
+    showToast(`已刷新 ${pageCount} 页 HTML 预览`, 'success');
     // Switch to slides tab
     document.querySelector('[data-tab="slides"]').click();
     updatePreview();
