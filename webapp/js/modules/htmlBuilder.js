@@ -2,6 +2,8 @@
  * HTML Builder — Generate standalone HTML deck
  */
 
+import { parseDeckPages } from './deckParsers.js';
+
 class HTMLBuilder {
   async buildHTML(project) {
     try {
@@ -176,22 +178,7 @@ html, body { height: 100%; overflow: hidden; background: #0f172a; font-family: '
   }
 
   _parsePages(markdown) {
-    if (!markdown) return [];
-    const pages = [];
-    const sections = markdown.split(/(?=^##?\s*P?\d+[:：\.\s])/m);
-
-    sections.forEach(section => {
-      const match = section.match(/^##?\s*P?(\d+)[:：\.\s]*(.+)/m);
-      if (match) {
-        pages.push({
-          id: `slide_${String(parseInt(match[1])).padStart(2, '0')}`,
-          title: match[2].trim(),
-          content: section.replace(/^##?\s*P?\d+[:：\.\s]*.+/m, '').trim()
-        });
-      }
-    });
-
-    return pages;
+    return parseDeckPages(markdown);
   }
 
   _parseTheme(jsonStr) {

@@ -2,6 +2,8 @@
  * Slide Preview — 解析 deck_clean_pages.md + visual_composition.md 渲染 HTML/SVG slides
  */
 
+import { parseDeckPages, parseVisualSections } from './deckParsers.js';
+
 const ARCHETYPES = {
   title: { name: '封面', bg: 'bg-gradient-to-br from-slate-900 to-slate-800', text: 'text-white' },
   content: { name: '内容', bg: 'bg-white', text: 'text-slate-800' },
@@ -22,51 +24,26 @@ class SlidePreview {
   }
 
   parseCleanPages(markdown) {
-    if (!markdown) return [];
-    const pages = [];
-    const sections = markdown.split(/(?=^##?\s*P?\d+[:：\.\s])/m);
-
-    sections.forEach(section => {
-      const match = section.match(/^##?\s*P?(\d+)[:：\.\s]*(.+)/m);
-      if (match) {
-        const pageNum = parseInt(match[1]);
-        const title = match[2].trim();
-        const content = section.replace(/^##?\s*P?\d+[:：\.\s]*.+/m, '').trim();
-        pages.push({ id: `slide_${String(pageNum).padStart(2, '0')}`, pageNum, title, content });
-      }
-    });
-
-    // Fallback: if no structured pages, treat whole markdown as one page
-    if (pages.length === 0 && markdown.trim()) {
-      pages.push({ id: 'slide_01', pageNum: 1, title: 'Slide 1', content: markdown });
-    }
-
+    const pages = parseDeckPages(markdown);
     this.pages = pages;
     return pages;
   }
 
   parseVisualComposition(markdown) {
     if (!markdown) return [];
-    const visuals = [];
-    const sections = markdown.split(/(?=^##?\s*P?\d+)/m);
+    const visuals = parseVisualSections(markdown).map(section => {
+      const archetypeMatch = section.body.match(/archetype[：:]\s*([a-z_]+)/i);
+      const protagonistMatch = section.body.match(/(?:visual protagonist|protagonist|视觉主角|主视觉)[：:]\s*(.+)/i);
+      const weightMatch = section.body.match(/(?:visual weight|weight|视觉权重)[：:]\s*(.+)/i);
+      const chartMatch = section.body.match(/(?:chart|图表)[：:]\s*(.+)/i);
 
-    sections.forEach(section => {
-      const match = section.match(/^##?\s*P?(\d+)/m);
-      if (match) {
-        const pageNum = parseInt(match[1]);
-        const archetypeMatch = section.match(/archetype[：:]\s*(\w+)/i);
-        const protagonistMatch = section.match(/visual protagonist[：:]\s*(.+)/i);
-        const weightMatch = section.match(/weight[：:]\s*(.+)/i);
-        const chartMatch = section.match(/chart[：:]\s*(.+)/i);
-
-        visuals.push({
-          pageNum,
-          archetype: archetypeMatch ? archetypeMatch[1].toLowerCase() : 'content',
-          protagonist: protagonistMatch ? protagonistMatch[1].trim() : '',
-          weight: weightMatch ? weightMatch[1].trim() : '',
-          chart: chartMatch ? chartMatch[1].trim() : ''
-        });
-      }
+      return {
+        pageNum: section.pageNum,
+        archetype: archetypeMatch ? archetypeMatch[1].toLowerCase() : 'content',
+        protagonist: protagonistMatch ? protagonistMatch[1].trim() : '',
+        weight: weightMatch ? weightMatch[1].trim() : '',
+        chart: chartMatch ? chartMatch[1].trim() : ''
+      };
     });
 
     this.visuals = visuals;
@@ -118,6 +95,7 @@ class SlidePreview {
             <div class="flex-1 overflow-hidden">
               ${this.renderVisualPlaceholder(mergedVisual, primary, secondary)}
             </div>
+            <div class="mt-3 text-[11px] opacity-70 line-clamp-4 whitespace-pre-wrap">${page.content || '暂无正文内容'}</div>
           </div>
         </div>
       `;
