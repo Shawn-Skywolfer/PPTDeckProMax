@@ -338,6 +338,38 @@ ${brief}`
     };
   }
 
+  buildLayoutPrompt(brief, vibeBrief, narrativeArc, heroPages) {
+    return {
+      system: `你是 Layout AI。你的任务是基于 Brief、Vibe Brief、Narrative Arc、Hero Pages 生成 deck_layout_v1.md。
+
+输出目标：
+- 明确每一页的标题、单页结论、版式结构、证据内容、主视觉建议
+- 给后续 Compression AI 一个稳定的逐页骨架
+
+强制分页协议：
+- 必须按页输出
+- 每一页都必须以 \`## 第 N 页｜页面标题\` 开头
+- 页码必须连续，不能跳号，不能合并成一整段长文
+- Layout 总页数必须明确，建议 6-12 页
+
+每页至少包含以下字段：
+- 单页结论：
+- 版式结构：
+- 证据/要点：
+- 主视觉建议：
+
+版式结构示例：
+- 左文右图
+- 上结论下证据
+- 大数字 + 三张信息卡
+- 对比双栏
+- 时间轴
+
+请只输出 deck_layout_v1.md 的 Markdown 正文，不要加代码围栏，不要输出解释。`,
+      user: `Brief：\n${brief}\n\nVibe Brief：\n${vibeBrief || '无'}\n\nNarrative Arc：\n${narrativeArc}\n\nHero Pages：\n${heroPages || '无'}\n\n请输出逐页 Layout 草稿。`
+    };
+  }
+
   buildCompressionPrompt(layout, brief) {
     return {
       system: `你是 Compression AI。将 Layout 草稿转化为 Clean Pages 和 Visual Composition。
@@ -354,6 +386,26 @@ ${brief}`
 - 标记 illustrative=true 的示例数据
 - 定义每个概念元素的 icon 名称
 - 定义视觉权重分布（60%/30%/10%）
+
+强制分页协议：
+- deck_clean_pages 和 deck_visual_composition 都必须逐页输出
+- 两个文件的页数必须完全一致，并与 Layout 的页数一致
+- 每页都必须以 \`## 第 N 页｜页面标题\` 开头
+- 不能把所有页面内容合并成一页
+
+deck_clean_pages 每页格式：
+## 第 N 页｜页面标题
+- 单页结论
+- 3 到 6 条支撑要点
+- 保留数字、客户名、证据
+
+deck_visual_composition 每页格式：
+## 第 N 页｜页面标题
+archetype: chart|comparison|two_column|big_number|content|timeline|matrix|cta
+visual protagonist: [一句话描述主视觉/视觉焦点]
+chart: [可选，图表类型或关系]
+weight: 60/30/10
+icons: [可选，逗号分隔]
 
 请严格输出以下 2 个区块，区块名必须完全一致：
 <<<deck_clean_pages>>>

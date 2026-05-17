@@ -3,8 +3,10 @@
  */
 
 import { providerManager } from './providerManager.js';
+import { parseDeckPages } from './deckParsers.js';
 
 const BACKEND_URL = 'http://localhost:8765';
+const PPTXGEN_BUNDLE_URL = 'https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js';
 
 class PPTXBuilder {
   constructor() {
@@ -67,26 +69,21 @@ class PPTXBuilder {
 
   async _buildViaBrowser(project) {
     try {
-      // Check if PptxGenJS is available
-      if (typeof PptxGenJS === 'undefined') {
-        // Load PptxGenJS dynamically
-        await this._loadScript('https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.min.js');
-      }
-
-      const pptx = new PptxGenJS();
+      const PptxCtor = await this._ensurePptxConstructor();
+      const pptx = new PptxCtor();
       pptx.layout = 'LAYOUT_16x9';
 
       const theme = this._parseTheme(project.artifacts.deck_theme_tokens);
       const colors = theme.colors || {};
-      const primary = colors.primary || '6366f1';
-      const textDark = colors.text_dark || '1e293b';
+      const primary = this._normalizePptxColor(colors.primary, '6366f1');
+      const textDark = this._normalizePptxColor(colors.text_dark, '1e293b');
 
       pptx.defineSlideMaster({
         title: 'MASTER_SLIDE',
         background: { color: 'FFFFFF' }
       });
 
-      const pages = this._parsePages(project.artifacts.deck_clean_pages);
+      const pages = this._getRenderablePages(project);
       pages.forEach((page, idx) => {
         const slide = pptx.addSlide();
         slide.background = { color: idx === 0 ? primary : 'FFFFFF' };
@@ -258,22 +255,19 @@ ul li::before {
   }
 
   _parsePages(markdown) {
-    if (!markdown) return [];
-    const pages = [];
-    const sections = markdown.split(/(?=^##?\s*P?\d+[:：\.\s])/m);
+    return parseDeckPages(markdown);
+  }
 
-    sections.forEach(section => {
-      const match = section.match(/^##?\s*P?(\d+)[:：\.\s]*(.+)/m);
-      if (match) {
-        pages.push({
-          id: `slide_${String(parseInt(match[1])).padStart(2, '0')}`,
-          title: match[2].trim(),
-          content: section.replace(/^##?\s*P?\d+[:：\.\s]*.+/m, '').trim()
-        });
-      }
-    });
-
-    return pages;
+  _getRenderablePages(project) {
+    const builtPages = project.artifacts.slide_state?.pages || [];
+    if (builtPages.length > 0) {
+      return builtPages.map(page => ({
+        id: page.page_id,
+        title: page.title,
+        content: page.content || ''
+      }));
+    }
+    return this._parsePages(project.artifacts.deck_clean_pages);
   }
 
   _parseTheme(jsonStr) {
@@ -304,11 +298,54 @@ ul li::before {
     URL.revokeObjectURL(url);
   }
 
+  _resolvePptxConstructor() {
+    const candidates = [
+      globalThis.PptxGenJS,
+      globalThis.PptxGenJS?.default,
+      globalThis.pptxgen,
+      globalThis.pptxgen?.default,
+      globalThis.pptxgenjs,
+      globalThis.pptxgenjs?.default
+    ];
+
+    return candidates.find(candidate => typeof candidate === 'function') || null;
+  }
+
+  _normalizePptxColor(value, fallback) {
+    const normalized = String(value || fallback || '').trim().replace(/^#/, '');
+    return /^[0-9a-fA-F]{6}$/.test(normalized) ? normalized : fallback;
+  }
+
+  async _ensurePptxConstructor() {
+    let ctor = this._resolvePptxConstructor();
+    if (ctor) return ctor;
+
+    await this._loadScript(PPTXGEN_BUNDLE_URL);
+    ctor = this._resolvePptxConstructor();
+    if (ctor) return ctor;
+
+    throw new Error('PptxGenJS browser bundle loaded, but no constructor was found');
+  }
+
   _loadScript(src) {
     return new Promise((resolve, reject) => {
+      const existing = document.querySelector(`script[src="${src}"]`);
+      if (existing) {
+        if (existing.dataset.loaded === 'true') {
+          resolve();
+          return;
+        }
+        existing.addEventListener('load', () => resolve(), { once: true });
+        existing.addEventListener('error', reject, { once: true });
+        return;
+      }
+
       const script = document.createElement('script');
       script.src = src;
-      script.onload = resolve;
+      script.onload = () => {
+        script.dataset.loaded = 'true';
+        resolve();
+      };
       script.onerror = reject;
       document.head.appendChild(script);
     });

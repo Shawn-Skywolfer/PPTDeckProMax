@@ -2,10 +2,12 @@
  * HTML Builder — Generate standalone HTML deck
  */
 
+import { parseDeckPages } from './deckParsers.js';
+
 class HTMLBuilder {
   async buildHTML(project) {
     try {
-      const pages = this._parsePages(project.artifacts.deck_clean_pages);
+      const pages = this._getRenderablePages(project);
       if (pages.length === 0) {
         return { success: false, error: 'No pages found' };
       }
@@ -22,14 +24,34 @@ class HTMLBuilder {
     }
   }
 
+  _getRenderablePages(project) {
+    const builtPages = project.artifacts.slide_state?.pages || [];
+    if (builtPages.length > 0) {
+      return builtPages.map(page => ({
+        id: page.page_id,
+        title: page.title,
+        content: page.content || ''
+      }));
+    }
+    return this._parsePages(project.artifacts.deck_clean_pages);
+  }
+
   _generateDeckHTML(pages, project, theme, layoutManifest = { pages: [] }) {
     const colors = theme.colors || {};
     const primary = colors.primary || '#6366f1';
     const textDark = colors.text_dark || '#1e293b';
     const bg = colors.bg || '#ffffff';
+    const builtPages = project.artifacts.slide_state?.pages || [];
 
     const slidesHtml = pages.map((page, idx) => {
       const layout = layoutManifest.pages.find(item => item.page_id === page.id) || {};
+      const built = builtPages.find(item => item.page_id === page.id);
+      if (built?.html) {
+        return `
+<article class="slide" id="slide-${idx + 1}" data-index="${idx + 1}" style="display:none;">
+  ${built.html}
+</article>`;
+      }
       const lines = page.content.split('\n').filter(l => l.trim());
       const contentHtml = lines.map(l => {
         const trimmed = l.trim().replace(/^[-*•]\s*/, '');
@@ -176,22 +198,7 @@ html, body { height: 100%; overflow: hidden; background: #0f172a; font-family: '
   }
 
   _parsePages(markdown) {
-    if (!markdown) return [];
-    const pages = [];
-    const sections = markdown.split(/(?=^##?\s*P?\d+[:：\.\s])/m);
-
-    sections.forEach(section => {
-      const match = section.match(/^##?\s*P?(\d+)[:：\.\s]*(.+)/m);
-      if (match) {
-        pages.push({
-          id: `slide_${String(parseInt(match[1])).padStart(2, '0')}`,
-          title: match[2].trim(),
-          content: section.replace(/^##?\s*P?\d+[:：\.\s]*.+/m, '').trim()
-        });
-      }
-    });
-
-    return pages;
+    return parseDeckPages(markdown);
   }
 
   _parseTheme(jsonStr) {

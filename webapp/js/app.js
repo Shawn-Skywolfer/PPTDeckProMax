@@ -19,6 +19,7 @@ let currentProject = null;
 let interviewManager = null;
 let slidePreview = new SlidePreview();
 let qaEngine = new QAEngine();
+let buildPreviewPageNum = 1;
 
 // ===== DOM Elements =====
 const els = {
@@ -226,7 +227,7 @@ function safeJsonParse(value, fallback = {}) {
 
 function buildAssetManifestFallback(project = currentProject) {
   if (!project) return { assets: [] };
-  const pages = slidePreview.parseCleanPages(project.artifacts.deck_clean_pages || '');
+  const { pages } = resolveRenderablePages(project);
   const visuals = slidePreview.parseVisualComposition(project.artifacts.deck_visual_composition || '');
   return {
     assets: pages.map((page) => {
@@ -244,9 +245,29 @@ function buildAssetManifestFallback(project = currentProject) {
   };
 }
 
+function resolveRenderablePages(project = currentProject) {
+  if (!project) return { pages: [], source: 'none', cleanPages: [], layoutPages: [] };
+  const cleanPages = slidePreview.parseCleanPages(project.artifacts.deck_clean_pages || '');
+  const layoutPages = slidePreview.parseCleanPages(project.artifacts.deck_layout_v1 || '');
+
+  if (cleanPages.length > 1) {
+    return { pages: cleanPages, source: 'clean_pages', cleanPages, layoutPages };
+  }
+
+  if (layoutPages.length > 1) {
+    return { pages: layoutPages, source: 'layout_v1_fallback', cleanPages, layoutPages };
+  }
+
+  return { pages: cleanPages, source: cleanPages.length ? 'clean_pages' : 'layout_v1', cleanPages, layoutPages };
+}
+
+function serializePagesToMarkdown(pages = []) {
+  return pages.map(page => `## 第 ${page.pageNum} 页｜${page.title}\n${page.content || ''}`.trim()).join('\n\n');
+}
+
 function buildDeckRuntimeArtifacts(project = currentProject) {
   if (!project) return null;
-  const pages = slidePreview.parseCleanPages(project.artifacts.deck_clean_pages || '');
+  const { pages, source, cleanPages, layoutPages } = resolveRenderablePages(project);
   const visuals = slidePreview.parseVisualComposition(project.artifacts.deck_visual_composition || '');
   const theme = safeJsonParse(project.artifacts.deck_theme_tokens, {});
   const assetManifest = project.artifacts.asset_manifest?.assets?.length
@@ -256,12 +277,13 @@ function buildDeckRuntimeArtifacts(project = currentProject) {
   const layoutManifest = {
     pages: pages.map((page) => {
       const visual = visuals.find(v => v.pageNum === page.pageNum) || {};
+      const protagonist = visual.protagonist || slidePreview.inferProtagonist(page, visual);
       return {
         page_id: page.id,
         page_num: page.pageNum,
         title: page.title,
         archetype: visual.archetype || 'content',
-        protagonist: visual.protagonist || '',
+        protagonist,
         weight: visual.weight || '',
         chart: visual.chart || '',
         asset_count: assetManifest.assets.filter(asset => asset.page_id === page.id).length
@@ -270,6 +292,15 @@ function buildDeckRuntimeArtifacts(project = currentProject) {
   };
 
   const previousState = project.artifacts.slide_state || {};
+  const renderedSlides = slidePreview.buildRenderedSlides({
+    deck_clean_pages: source === 'layout_v1_fallback'
+      ? serializePagesToMarkdown(pages)
+      : (project.artifacts.deck_clean_pages || ''),
+    deck_visual_composition: project.artifacts.deck_visual_composition || '',
+    deck_theme_tokens: theme,
+    layout_manifest: layoutManifest,
+    asset_manifest: assetManifest
+  }, project.name || 'PPT Deck Pro Max');
   const slideState = {
     ...previousState,
     project_id: previousState.project_id || project.id,
@@ -277,17 +308,25 @@ function buildDeckRuntimeArtifacts(project = currentProject) {
     visual_locked: Boolean(project.artifacts.deck_visual_system),
     review_iteration: previousState.review_iteration || 0,
     output_mode: project.outputMode || previousState.output_mode || 'pptx+html',
+    page_source: source,
+    source_page_count: {
+      clean_pages: cleanPages.length,
+      layout_v1: layoutPages.length
+    },
     pages: pages.map((page) => {
       const layout = layoutManifest.pages.find(item => item.page_id === page.id) || {};
       const assets = assetManifest.assets.filter(asset => asset.page_id === page.id);
+      const rendered = renderedSlides.find(item => item.page_id === page.id) || {};
       return {
         page_id: page.id,
+        page_num: page.pageNum,
         title: page.title,
         status: 'ready',
         archetype: layout.archetype || 'content',
-        protagonist: layout.protagonist || '',
+        protagonist: layout.protagonist || slidePreview.inferProtagonist(page, layout),
         content: page.content,
-        assets
+        assets,
+        html: rendered.html || ''
       };
     }),
     theme
@@ -306,6 +345,64 @@ function syncBuildArtifacts(project = currentProject) {
 function syncQAArtifacts() {
   if (!currentProject || !qaEngine) return;
   persistArtifactMap(qaEngine.exportArtifacts());
+}
+
+function syncCurrentProjectReference() {
+  const latestProject = artifactStore.getCurrentProject();
+  if (latestProject) {
+    currentProject = latestProject;
+  }
+  return currentProject;
+}
+
+function buildInterviewSessionArtifact(overrides = {}) {
+  syncCurrentProjectReference();
+  if (!currentProject) return null;
+  const existing = currentProject.artifacts.interview_session || {};
+  const interviewState = {
+    ...(currentProject.interview || {}),
+    ...existing,
+    ...overrides
+  };
+
+  return {
+    scenario: interviewState.scenario || currentProject.briefScenario || 'business_proposal',
+    mode: interviewState.mode || 'chat',
+    sessionState: interviewState.sessionState || 'preparing',
+    fillRate: interviewState.fillRate || 0,
+    redactionPending: interviewState.redactionPending || 0,
+    claims: interviewState.claims || [],
+    gaps: interviewState.gaps || [],
+    messages: interviewState.messages || [],
+    redactionItems: interviewState.redactionItems || [],
+    updatedAt: Date.now()
+  };
+}
+
+function syncInterviewArtifacts(overrides = {}) {
+  syncCurrentProjectReference();
+  if (!currentProject) return null;
+
+  const managerState = interviewManager ? {
+    scenario: interviewManager.scenario,
+    mode: interviewManager.mode,
+    claims: interviewManager.claims,
+    gaps: interviewManager.gaps,
+    messages: interviewManager.messages,
+    redactionItems: interviewManager.redactionItems,
+    fillRate: interviewManager.getFillRate(),
+    redactionPending: interviewManager.redactionItems.filter(item => item.status === 'pending').length
+  } : {};
+
+  const interviewData = {
+    ...(currentProject.interview || {}),
+    ...managerState,
+    ...overrides
+  };
+
+  artifactStore.setInterviewData(interviewData);
+  artifactStore.setArtifact('interview_session', buildInterviewSessionArtifact(interviewData));
+  return interviewData;
 }
 
 function restoreProjectRuntime(project) {
@@ -792,7 +889,8 @@ function renderStepper() {
   workflowEngine.renderStepper(els.stepper, currentProject, currentMode);
 }
 
-function renderStepContent() {
+function refreshWorkflowChrome() {
+  syncCurrentProjectReference();
   const step = workflowEngine.getCurrentStep();
   if (!step) return;
 
@@ -804,6 +902,15 @@ function renderStepContent() {
   const next = workflowEngine.getNextStep(currentMode);
   els.prevBtn.disabled = !prev;
   els.nextBtn.disabled = !next || !workflowEngine.canAdvance(currentProject);
+
+  renderStepper();
+}
+
+function renderStepContent() {
+  const step = workflowEngine.getCurrentStep();
+  if (!step) return;
+
+  refreshWorkflowChrome();
 
   const content = buildStepUI(step);
   els.stepContent.innerHTML = '';
@@ -1037,9 +1144,55 @@ function buildStepUI(step) {
       break;
     }
 
-    case 'layout':
-      container.innerHTML = buildArtifactEditor('deck_layout_v1', 'deck_layout_v1.md', '逐页布局草稿...');
+    case 'layout': {
+      const brief = currentProject?.artifacts.deck_brief || '';
+      const vibeBrief = currentProject?.artifacts.deck_vibe_brief || '';
+      const narrativeArc = currentProject?.artifacts.deck_narrative_arc || '';
+      const heroPages = currentProject?.artifacts.deck_hero_pages || '';
+      container.innerHTML = `
+        <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 mb-6">
+          <div class="text-sm font-semibold text-slate-800 mb-2">这一页要做什么</div>
+          <div class="text-xs text-slate-600 leading-6 space-y-1">
+            <div>1. 把叙事弧线拆成逐页草稿，而不是一整篇说明文。</div>
+            <div>2. 每页写清楚：标题、单页结论、版式结构、证据/要点、主视觉建议。</div>
+            <div>3. 每页必须以 <code>## 第 N 页｜页面标题</code> 开头，后面的压缩/构图和 Build 都靠这个分页。</div>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+          <div class="rounded-xl border border-slate-200 bg-white p-4">
+            <div class="text-sm font-semibold text-slate-800 mb-2">推荐版式结构</div>
+            <div class="text-xs text-slate-500 leading-6">左文右图、上结论下证据、大数字卡、双栏对比、时间轴、矩阵图。</div>
+          </div>
+          <div class="rounded-xl border border-slate-200 bg-white p-4">
+            <div class="text-sm font-semibold text-slate-800 mb-2">推荐输出长度</div>
+            <div class="text-xs text-slate-500 leading-6">通常 6-12 页。每页保留 1 个结论和 3-6 条支撑信息即可。</div>
+          </div>
+        </div>
+        <button id="generate-layout-btn" class="w-full px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2 mb-6">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+          生成 Layout 草稿
+        </button>
+        <div class="rounded-xl border border-dashed border-slate-300 bg-white/70 p-4 mb-6">
+          <div class="text-xs font-medium text-slate-700 mb-2">格式示例</div>
+          <pre class="text-[11px] leading-5 text-slate-500 whitespace-pre-wrap">## 第 1 页｜封面 / 核心命题
+单页结论：一句话讲清这页要传达什么
+版式结构：大标题 + 副标题 + 右侧主视觉
+证据/要点：
+- 要点 1
+- 要点 2
+- 要点 3
+主视觉建议：大数字 / 封面图 / 品牌场景图</pre>
+        </div>
+        ${buildArtifactEditor('deck_layout_v1', 'deck_layout_v1.md', '逐页布局草稿...')}
+      `;
+      setTimeout(() => {
+        container.querySelector('#generate-layout-btn').addEventListener('click', () => {
+          const prompt = promptEngine.buildLayoutPrompt(brief, vibeBrief, narrativeArc, heroPages);
+          generateArtifact('brief', 'deck_layout_v1', prompt, container.querySelector('#generate-layout-btn'));
+        });
+      }, 0);
       break;
+    }
 
     case 'compression': {
       const layout = currentProject?.artifacts.deck_layout_v1 || '';
@@ -1062,7 +1215,11 @@ function buildStepUI(step) {
             container.querySelector('#generate-compression-btn'),
             { previewArtifactKey: 'deck_clean_pages' }
           ).then(() => {
-            syncBuildArtifacts();
+            const runtimeArtifacts = syncBuildArtifacts();
+            const counts = runtimeArtifacts?.slide_state?.source_page_count || {};
+            if ((counts.clean_pages || 0) <= 1 && (counts.layout_v1 || 0) > 1) {
+              showToast(`Clean Pages 只识别到 ${counts.clean_pages || 1} 页，已临时按 Layout 的 ${counts.layout_v1} 页骨架预览；建议回看压缩输出格式。`, 'warning');
+            }
           });
         });
       }, 0);
@@ -1257,7 +1414,7 @@ function initInterviewUI(container) {
     const rate = interviewManager.getFillRate();
     fillRateDisplay.textContent = rate + '%';
     fillRateBar.style.width = rate + '%';
-    artifactStore.setInterviewData({ fillRate: rate, scenario: interviewManager.scenario });
+    syncInterviewArtifacts({ fillRate: rate, scenario: interviewManager.scenario });
   }
 
   // Scenario switch handler
@@ -1279,15 +1436,7 @@ function initInterviewUI(container) {
       interviewManager.setScenario(newScenario);
       if (scenarioDesc) scenarioDesc.textContent = SCENARIO_CONFIG[newScenario].description;
       updateFillRate();
-
-      // Persist
-      artifactStore.setInterviewData({
-        scenario: newScenario,
-        claims: interviewManager.claims,
-        gaps: interviewManager.gaps,
-        messages: interviewManager.messages,
-        fillRate: interviewManager.getFillRate()
-      });
+      syncInterviewArtifacts({ scenario: newScenario });
 
       // Reset UI
       contentDiv.innerHTML = `<div class="p-8 text-center text-slate-400">
@@ -1347,7 +1496,7 @@ function initInterviewUI(container) {
 
     showToast('正在分析 Claims 和 Gaps...', 'info');
     const { claims, gaps } = interviewManager.extractClaimsAndGaps(cleanPages, brief);
-    artifactStore.setInterviewData({ claims, gaps });
+    syncInterviewArtifacts({ claims, gaps, sessionState: gaps.length === 0 ? 'finalized' : 'in_progress' });
 
     if (gaps.length === 0) {
       showToast('未发现知识缺口', 'success');
@@ -1374,7 +1523,7 @@ function initInterviewUI(container) {
   container.querySelector('#finalize-interview').addEventListener('click', () => {
     const expertContext = interviewManager.finalize();
     artifactStore.setArtifact('deck_expert_context', expertContext);
-    artifactStore.setInterviewData({ sessionState: 'finalized' });
+    syncInterviewArtifacts({ sessionState: 'finalized' });
     showToast('Expert Context 已生成', 'success');
     updatePreview();
   });
@@ -1400,13 +1549,13 @@ function initRedactionUI(container) {
 
   interviewManager.renderRedactionUI(listDiv, () => {
     const pending = interviewManager.redactionItems.filter(r => r.status === 'pending').length;
-    artifactStore.setInterviewData({ redactionPending: pending });
+    syncInterviewArtifacts({ redactionPending: pending });
   });
 
   container.querySelector('#confirm-redaction').addEventListener('click', () => {
     const expertContext = interviewManager.finalize();
     artifactStore.setArtifact('deck_expert_context', expertContext);
-    artifactStore.setInterviewData({ sessionState: 'finalized', redactionPending: 0 });
+    syncInterviewArtifacts({ sessionState: 'finalized', redactionPending: 0 });
     showToast('脱敏完成，Expert Context 已生成', 'success');
     updatePreview();
   });
@@ -1416,14 +1565,27 @@ function initRedactionUI(container) {
 function buildBuildUI() {
   const runtimeArtifacts = buildDeckRuntimeArtifacts() || { layout_manifest: { pages: [] } };
   const pages = runtimeArtifacts.layout_manifest.pages || [];
+  const renderedPages = runtimeArtifacts.slide_state?.pages || [];
+  const pageSource = runtimeArtifacts.slide_state?.page_source || 'clean_pages';
+  const sourceCounts = runtimeArtifacts.slide_state?.source_page_count || {};
+  buildPreviewPageNum = Math.min(Math.max(buildPreviewPageNum, 1), Math.max(renderedPages.length, 1));
+  const activePage = renderedPages.find(page => page.page_num === buildPreviewPageNum) || renderedPages[0] || null;
+  const sourceHint = pageSource === 'layout_v1_fallback'
+    ? `当前 deck_clean_pages 只识别到 ${sourceCounts.clean_pages || 1} 页，系统临时按 deck_layout_v1 的 ${sourceCounts.layout_v1 || pages.length} 页骨架来预览。建议回到「内容压缩 + 视觉构图」修正分页输出。`
+    : pages.length === 1
+    ? '当前只识别到 1 页。通常说明 `内容压缩 + 视觉构图` 里的 `deck_clean_pages.md` 没有正确分页。'
+    : `当前从 deck_clean_pages 共识别到 ${pages.length} 页。`;
   return `
     <div class="space-y-6">
       <div class="flex items-center justify-between">
-        <h3 class="text-lg font-semibold text-slate-800">构建 Deck</h3>
+        <div>
+          <h3 class="text-lg font-semibold text-slate-800">构建 Deck</h3>
+          <p class="text-xs text-slate-500 mt-1">会一次性刷新全部页面预览，不需要逐页点击生成。</p>
+        </div>
         <div class="flex gap-2">
           <button id="build-html-btn" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-all flex items-center gap-2">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/></svg>
-            构建 HTML 预览
+            刷新全部页面预览
           </button>
           <button id="build-pptx-btn" class="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium rounded-lg transition-all flex items-center gap-2">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10l2-9H5l2 9zm0 0L5 9h14l-2 12m-5-6v6m0 0H9m3 0h3"/></svg>
@@ -1438,11 +1600,52 @@ function buildBuildUI() {
         </div>
         <div class="p-4 bg-white border border-slate-200 rounded-xl">
           <div class="text-2xl font-bold text-slate-800">${pages.filter(p => p.protagonist).length}</div>
-          <div class="text-xs text-slate-500 mt-1">已定义视觉主角</div>
+          <div class="text-xs text-slate-500 mt-1">已准备视觉焦点</div>
         </div>
         <div class="p-4 bg-white border border-slate-200 rounded-xl">
           <div class="text-2xl font-bold text-slate-800">${pages.reduce((sum, p) => sum + (p.asset_count || 0), 0)}</div>
           <div class="text-xs text-slate-500 mt-1">规划素材条目</div>
+        </div>
+      </div>
+      <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <div class="text-sm font-semibold text-slate-800">分页识别结果</div>
+            <div class="text-xs text-slate-500 mt-1">${sourceHint}</div>
+          </div>
+          ${pages.length === 1 ? `
+            <button id="go-check-clean-pages-btn" class="px-3 py-1.5 text-xs bg-white border border-slate-200 hover:border-indigo-300 text-slate-700 rounded-lg transition-all">
+              去检查 deck_clean_pages
+            </button>
+          ` : ''}
+        </div>
+      </div>
+      <div class="rounded-xl border border-slate-200 bg-white overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-4">
+          <div>
+            <div class="text-sm font-semibold text-slate-800">内嵌页面预览</div>
+            <div class="text-xs text-slate-500 mt-1">${activePage ? `当前第 ${activePage.page_num} / ${renderedPages.length} 页：${activePage.title}` : '暂无可预览页面'}</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button id="build-preview-prev" class="px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg transition-all ${buildPreviewPageNum <= 1 ? 'text-slate-300 cursor-not-allowed' : 'hover:border-indigo-300 text-slate-700'}" ${buildPreviewPageNum <= 1 ? 'disabled' : ''}>
+              上一页
+            </button>
+            <div class="text-xs text-slate-500 min-w-16 text-center">${activePage ? `${buildPreviewPageNum} / ${renderedPages.length}` : '-- / --'}</div>
+            <button id="build-preview-next" class="px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg transition-all ${buildPreviewPageNum >= renderedPages.length ? 'text-slate-300 cursor-not-allowed' : 'hover:border-indigo-300 text-slate-700'}" ${buildPreviewPageNum >= renderedPages.length ? 'disabled' : ''}>
+              下一页
+            </button>
+          </div>
+        </div>
+        <div class="p-4 bg-slate-100">
+          ${activePage?.html ? `
+            <div class="mx-auto max-w-5xl">
+              <div class="aspect-video bg-slate-200 rounded-2xl overflow-hidden border border-slate-200 shadow-sm">
+                ${activePage.html}
+              </div>
+            </div>
+          ` : `
+            <div class="text-center py-16 text-slate-400 text-sm">暂无页面渲染结果，请先刷新全部页面预览</div>
+          `}
         </div>
       </div>
       <div id="build-pages-list" class="space-y-3">
@@ -1451,17 +1654,17 @@ function buildBuildUI() {
             暂无页面，请先在「Clean Pages」步骤定义内容
           </div>
         ` : pages.map(page => `
-          <div class="p-4 bg-white border border-slate-200 rounded-xl">
+          <button type="button" class="build-page-item w-full text-left p-4 bg-white border rounded-xl transition-all ${page.page_num === buildPreviewPageNum ? 'border-indigo-300 ring-2 ring-indigo-500/10' : 'border-slate-200 hover:border-indigo-200'}" data-page-num="${page.page_num}">
             <div class="flex items-start justify-between gap-4">
               <div>
                 <div class="text-sm font-semibold text-slate-800">${page.page_num}. ${page.title}</div>
-                <div class="text-xs text-slate-500 mt-1">Archetype: ${page.archetype || 'content'} · 视觉主角: ${page.protagonist || '待补充'}</div>
+                <div class="text-xs text-slate-500 mt-1">页面类型: ${page.archetype || 'content'} · 视觉焦点: ${page.protagonist || '系统自动补全'}</div>
               </div>
-              <div class="text-xs px-2 py-1 rounded-full ${page.protagonist ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}">
-                ${page.protagonist ? '可构建' : '需补主角'}
+              <div class="text-xs px-2 py-1 rounded-full bg-emerald-50 text-emerald-700">
+                ${page.protagonist ? '已可预览' : '已自动补全'}
               </div>
             </div>
-          </div>
+          </button>
         `).join('')}
       </div>
     </div>
@@ -1470,12 +1673,42 @@ function buildBuildUI() {
 
 function initBuildUI(container) {
   container.querySelector('#build-html-btn').addEventListener('click', () => {
-    syncBuildArtifacts();
-    showToast('HTML 预览已更新到右侧面板', 'success');
+    const runtimeArtifacts = syncBuildArtifacts();
+    const pageCount = runtimeArtifacts?.layout_manifest?.pages?.length || 0;
+    buildPreviewPageNum = Math.min(buildPreviewPageNum, Math.max(pageCount, 1));
+    showToast(`已刷新 ${pageCount} 页 HTML 预览`, 'success');
     // Switch to slides tab
     document.querySelector('[data-tab="slides"]').click();
     updatePreview();
     renderStepContent();
+  });
+
+  container.querySelector('#build-preview-prev')?.addEventListener('click', () => {
+    buildPreviewPageNum = Math.max(1, buildPreviewPageNum - 1);
+    renderStepContent();
+  });
+
+  container.querySelector('#build-preview-next')?.addEventListener('click', () => {
+    const pageCount = currentProject?.artifacts?.slide_state?.pages?.length || 1;
+    buildPreviewPageNum = Math.min(pageCount, buildPreviewPageNum + 1);
+    renderStepContent();
+  });
+
+  container.querySelectorAll('.build-page-item').forEach(item => {
+    item.addEventListener('click', () => {
+      buildPreviewPageNum = parseInt(item.dataset.pageNum, 10) || 1;
+      renderStepContent();
+    });
+  });
+
+  container.querySelector('#go-check-clean-pages-btn')?.addEventListener('click', () => {
+    workflowEngine.setStep(5);
+    artifactStore.setStep(5);
+    renderStepContent();
+    renderStepper();
+    requestAnimationFrame(() => {
+      document.querySelector('[data-artifact="deck_clean_pages"]')?.focus();
+    });
   });
 
   container.querySelector('#build-pptx-btn').addEventListener('click', async () => {
@@ -1876,13 +2109,30 @@ function initResizeHandle() {
 // ===== Workflow Engine Events =====
 workflowEngine.on('step:changed', (step) => {
   renderStepContent();
-  renderStepper();
   updatePreview();
 });
 
 // ===== Artifact Store Events =====
 artifactStore.on('artifact:changed', () => {
+  syncCurrentProjectReference();
+  refreshWorkflowChrome();
   updatePreview();
+});
+
+artifactStore.on('interview:changed', () => {
+  syncCurrentProjectReference();
+  refreshWorkflowChrome();
+  updatePreview();
+});
+
+artifactStore.on('project:meta-changed', () => {
+  syncCurrentProjectReference();
+  refreshWorkflowChrome();
+});
+
+artifactStore.on('status:changed', () => {
+  syncCurrentProjectReference();
+  refreshWorkflowChrome();
 });
 
 artifactStore.on('call:added', () => {
